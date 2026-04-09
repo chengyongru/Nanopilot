@@ -1,4 +1,4 @@
-# Nanobot Browser Extension
+# Nanopilot
 
 <p align="center">
   <img src="icons/icon128.png" width="56" alt="Nanobot">
@@ -17,7 +17,7 @@ Open a side panel for persistent multi-session conversations, or hit <kbd>Ctrl</
 ## Install
 
 ```bash
-git clone https://github.com/HKUDS/nanobot-extension.git
+git clone https://github.com/chengyongru/Nanopilot.git
 ```
 
 Then in Chrome: `chrome://extensions` → enable **Developer mode** → **Load unpacked** → select the repo folder.

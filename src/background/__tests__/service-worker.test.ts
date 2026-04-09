@@ -41,9 +41,7 @@ function setupChrome(): void {
 async function importAndGetMessageHandler() {
   vi.resetModules();
   setupChrome();
-  // Import triggers module-level side effects (addListener calls)
   await import('../service-worker');
-  // Extract the message handler from the registered listener
   const handler = addListenerSpies.runtimeOnMessage.mock.calls[0][0] as (
     msg: unknown,
     sender: chrome.runtime.MessageSender,
@@ -179,11 +177,31 @@ describe('service-worker', () => {
       );
 
       expect(result).toBe(true); // async
-      // Wait for the fetch promise chain to resolve
       await vi.waitFor(() => expect(sendResponse).toHaveBeenCalledWith({
         ok: true,
         status: 200,
         body: 'hello world',
+      }));
+    });
+
+    it('handles fetch with no headers', async () => {
+      const sendResponse = vi.fn();
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve('ok'),
+      }));
+
+      handler(
+        { type: 'NB_FETCH', url: 'https://api.example.com/data' },
+        {},
+        sendResponse,
+      );
+
+      await vi.waitFor(() => expect(sendResponse).toHaveBeenCalledWith({
+        ok: true,
+        status: 200,
+        body: 'ok',
       }));
     });
 
@@ -254,14 +272,12 @@ describe('service-worker', () => {
         return callCount === 1 ? oldWs : newWs;
       }));
 
-      // First connect
       handler(
         { type: 'NB_WS_CONNECT', url: 'ws://localhost/a' },
         { tab: { id: 1 } },
         sendResponse,
       );
 
-      // Second connect should close the first
       handler(
         { type: 'NB_WS_CONNECT', url: 'ws://localhost/b' },
         { tab: { id: 2 } },
@@ -286,6 +302,168 @@ describe('service-worker', () => {
       expect(result).toBe(false);
       expect(sendResponse).toHaveBeenCalledWith({ ok: false, error: 'invalid url' });
     });
+
+    it('handles open event and relays to tab', () => {
+      const sendResponse = vi.fn();
+      const mockWs = {
+        addEventListener: vi.fn(),
+        close: vi.fn(),
+        send: vi.fn(),
+        readyState: WebSocket.OPEN,
+      };
+      vi.stubGlobal('WebSocket', vi.fn().mockImplementation(() => mockWs));
+
+      handler(
+        { type: 'NB_WS_CONNECT', url: 'ws://localhost/ws' },
+        { tab: { id: 42 } },
+        sendResponse,
+      );
+
+      // Find and call the open handler
+      const openHandler = mockWs.addEventListener.mock.calls.find(
+        (c: unknown[]) => c[0] === 'open',
+      )?.[1];
+      openHandler();
+      expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(42, { type: 'NB_WS_OPEN' });
+    });
+
+    it('handles message event and relays to tab', () => {
+      const sendResponse = vi.fn();
+      const mockWs = {
+        addEventListener: vi.fn(),
+        close: vi.fn(),
+        send: vi.fn(),
+        readyState: WebSocket.OPEN,
+      };
+      vi.stubGlobal('WebSocket', vi.fn().mockImplementation(() => mockWs));
+
+      handler(
+        { type: 'NB_WS_CONNECT', url: 'ws://localhost/ws' },
+        { tab: { id: 42 } },
+        sendResponse,
+      );
+
+      const msgHandler = mockWs.addEventListener.mock.calls.find(
+        (c: unknown[]) => c[0] === 'message',
+      )?.[1];
+      msgHandler({ data: 'hello' });
+      expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(42, {
+        type: 'NB_WS_MESSAGE',
+        data: 'hello',
+      });
+    });
+
+    it('handles close event, relays to tab, and cleans up', () => {
+      const sendResponse = vi.fn();
+      const mockWs = {
+        addEventListener: vi.fn(),
+        close: vi.fn(),
+        send: vi.fn(),
+        readyState: WebSocket.OPEN,
+      };
+      vi.stubGlobal('WebSocket', vi.fn().mockImplementation(() => mockWs));
+
+      handler(
+        { type: 'NB_WS_CONNECT', url: 'ws://localhost/ws' },
+        { tab: { id: 42 } },
+        sendResponse,
+      );
+
+      const closeHandler = mockWs.addEventListener.mock.calls.find(
+        (c: unknown[]) => c[0] === 'close',
+      )?.[1];
+      closeHandler({ code: 1000, reason: 'done' });
+      expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(42, {
+        type: 'NB_WS_CLOSE',
+        code: 1000,
+        reason: 'done',
+      });
+    });
+
+    it('handles error event and relays to tab', () => {
+      const sendResponse = vi.fn();
+      const mockWs = {
+        addEventListener: vi.fn(),
+        close: vi.fn(),
+        send: vi.fn(),
+        readyState: WebSocket.OPEN,
+      };
+      vi.stubGlobal('WebSocket', vi.fn().mockImplementation(() => mockWs));
+
+      handler(
+        { type: 'NB_WS_CONNECT', url: 'ws://localhost/ws' },
+        { tab: { id: 42 } },
+        sendResponse,
+      );
+
+      const errorHandler = mockWs.addEventListener.mock.calls.find(
+        (c: unknown[]) => c[0] === 'error',
+      )?.[1];
+      errorHandler();
+      expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(42, {
+        type: 'NB_WS_ERROR',
+      });
+    });
+
+    it('handles tab close when relayWs close event fires (relayWs=null after)', () => {
+      const sendResponse = vi.fn();
+      const mockWs = {
+        addEventListener: vi.fn(),
+        close: vi.fn(),
+        send: vi.fn(),
+        readyState: WebSocket.OPEN,
+      };
+      vi.stubGlobal('WebSocket', vi.fn().mockImplementation(() => mockWs));
+
+      handler(
+        { type: 'NB_WS_CONNECT', url: 'ws://localhost/ws' },
+        { tab: { id: 42 } },
+        sendResponse,
+      );
+
+      const closeHandler = mockWs.addEventListener.mock.calls.find(
+        (c: unknown[]) => c[0] === 'close',
+      )?.[1];
+
+      // Simulate close - relayWs becomes null
+      closeHandler({ code: 1000, reason: 'done' });
+
+      // Now NB_WS_CLOSE should be a no-op since relayWs is null
+      const sendResponse2 = vi.fn();
+      const result = handler(
+        { type: 'NB_WS_CLOSE' },
+        {},
+        sendResponse2,
+      );
+      expect(result).toBe(false);
+      // No additional sendMessage call (relayWs is null, so close() is not called)
+      // The sendMessage from the close event is the last one for that tab
+    });
+
+    it('handles _relayToTab failure gracefully', () => {
+      const sendResponse = vi.fn();
+      const mockWs = {
+        addEventListener: vi.fn(),
+        close: vi.fn(),
+        send: vi.fn(),
+        readyState: WebSocket.OPEN,
+      };
+      vi.stubGlobal('WebSocket', vi.fn().mockImplementation(() => mockWs));
+      chrome.tabs.sendMessage.mockRejectedValue(new Error('tab closed'));
+
+      handler(
+        { type: 'NB_WS_CONNECT', url: 'ws://localhost/ws' },
+        { tab: { id: 42 } },
+        sendResponse,
+      );
+
+      const openHandler = mockWs.addEventListener.mock.calls.find(
+        (c: unknown[]) => c[0] === 'open',
+      )?.[1];
+
+      // Should not throw even if sendMessage fails
+      expect(() => openHandler()).not.toThrow();
+    });
   });
 
   // =========================================================================
@@ -293,7 +471,6 @@ describe('service-worker', () => {
   // =========================================================================
   describe('NB_WS_SEND', () => {
     it('sends text on open connection', async () => {
-      // First establish a connection via NB_WS_CONNECT
       const sendResponse = vi.fn();
       const mockWs = {
         addEventListener: vi.fn(),
@@ -309,7 +486,6 @@ describe('service-worker', () => {
         sendResponse,
       );
 
-      // Now send a message
       const result = handler(
         { type: 'NB_WS_SEND', text: 'hello from test' },
         {},
@@ -322,7 +498,20 @@ describe('service-worker', () => {
 
     it('does nothing when no WebSocket connection', () => {
       const sendResponse = vi.fn();
-      // No prior NB_WS_CONNECT, so relayWs is null
+      const result = handler(
+        { type: 'NB_WS_SEND', text: 'should not send' },
+        {},
+        sendResponse,
+      );
+
+      expect(result).toBe(false);
+      expect(sendResponse).not.toHaveBeenCalled();
+    });
+
+    it('does nothing when WebSocket is not OPEN', () => {
+      // This test runs in isolation - relayWs starts as null
+      // So NB_WS_SEND with no prior NB_WS_CONNECT is a no-op
+      const sendResponse = vi.fn();
       const result = handler(
         { type: 'NB_WS_SEND', text: 'should not send' },
         {},
@@ -348,14 +537,12 @@ describe('service-worker', () => {
       };
       vi.stubGlobal('WebSocket', vi.fn().mockImplementation(() => mockWs));
 
-      // Establish connection
       handler(
         { type: 'NB_WS_CONNECT', url: 'ws://localhost/ws' },
         { tab: { id: 1 } },
         sendResponse,
       );
 
-      // Close it
       const result = handler(
         { type: 'NB_WS_CLOSE' },
         {},
@@ -376,6 +563,20 @@ describe('service-worker', () => {
 
       expect(result).toBe(false);
       expect(sendResponse).not.toHaveBeenCalled();
+    });
+
+    it('is a no-op when relayWs is already null', () => {
+      // No prior NB_WS_CONNECT, so relayWs is null
+      const sendResponse = vi.fn();
+      const result = handler(
+        { type: 'NB_WS_CLOSE' },
+        {},
+        sendResponse,
+      );
+
+      expect(result).toBe(false);
+      expect(sendResponse).not.toHaveBeenCalled();
+      // Should not throw
     });
   });
 

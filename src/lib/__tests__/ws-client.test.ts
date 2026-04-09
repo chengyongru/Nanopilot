@@ -88,7 +88,6 @@ describe('NanobotWsClient', () => {
       const client = new NanobotWsClient(settings);
       const fn = vi.fn();
       client.on('ready', fn);
-      // access private via cast for testing
       (client as unknown as { _emit: (e: WsClientEvent, d: unknown) => void })._emit('ready', { chat_id: 'c1' });
       expect(fn).toHaveBeenCalledWith({ chat_id: 'c1' });
     });
@@ -123,7 +122,6 @@ describe('NanobotWsClient', () => {
       const good = vi.fn();
       client.on('delta', bad);
       client.on('delta', good);
-      // Suppress console.error from the catch
       const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
       (client as unknown as { _emit: (e: WsClientEvent, d: unknown) => void })._emit('delta', {});
       expect(spy).toHaveBeenCalledWith(
@@ -147,6 +145,13 @@ describe('NanobotWsClient', () => {
       const client = new NanobotWsClient(settings);
       const fn = vi.fn();
       expect(() => client.off('ready' as WsClientEvent, fn)).not.toThrow();
+    });
+
+    it('_emit on event with no listeners does not throw', () => {
+      const client = new NanobotWsClient(settings);
+      expect(() =>
+        (client as unknown as { _emit: (e: WsClientEvent, d: unknown) => void })._emit('ready', {}),
+      ).not.toThrow();
     });
   });
 
@@ -176,6 +181,21 @@ describe('NanobotWsClient', () => {
       expect(
         (client as unknown as { _isContentScript: () => boolean })._isContentScript(),
       ).toBe(false);
+    });
+
+    it('returns false when accessing chrome.runtime throws', () => {
+      vi.stubGlobal('location', { href: 'https://example.com' });
+      const err = new Error('no access');
+      Object.defineProperty(window, 'chrome', {
+        get() { throw err; },
+        configurable: true,
+      });
+      const client = new NanobotWsClient(settings);
+      expect(
+        (client as unknown as { _isContentScript: () => boolean })._isContentScript(),
+      ).toBe(false);
+      // Clean up
+      vi.stubGlobal('chrome', undefined);
     });
   });
 
@@ -305,6 +325,15 @@ describe('NanobotWsClient', () => {
       ).toBe('chat-42');
     });
 
+    it('emits "ready" with null chatId when chat_id is missing', () => {
+      const frame: ServerFrame = { event: 'ready' };
+      (client as unknown as { _handleFrame: (raw: string) => void })._handleFrame(JSON.stringify(frame));
+      expect(listeners.ready).toHaveBeenCalledWith(frame);
+      expect(
+        (client as unknown as { chatId: string | null }).chatId,
+      ).toBeNull();
+    });
+
     it('emits "delta"', () => {
       const frame: ServerFrame = { event: 'delta', text: 'hello' };
       (client as unknown as { _handleFrame: (raw: string) => void })._handleFrame(JSON.stringify(frame));
@@ -355,7 +384,6 @@ describe('NanobotWsClient', () => {
     it('send() in relay mode calls chrome.runtime.sendMessage', () => {
       stubContentScript();
       const client = new NanobotWsClient(settings);
-      // Force relay mode
       (client as unknown as { _relayed: boolean })._relayed = true;
       client.send('hello');
       expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({
@@ -380,6 +408,14 @@ describe('NanobotWsClient', () => {
       (client as unknown as { ws: WebSocket | null }).ws = mockWs;
       client.send('hello');
       expect(mockWs.send).not.toHaveBeenCalled();
+    });
+
+    it('send() in direct mode does nothing when ws is null', () => {
+      stubChromeExtension();
+      const client = new NanobotWsClient(settings);
+      (client as unknown as { ws: WebSocket | null }).ws = null;
+      client.send('hello');
+      // Should not throw
     });
   });
 
@@ -421,6 +457,14 @@ describe('NanobotWsClient', () => {
       stubChromeExtension();
       const client = new NanobotWsClient(settings);
       const mockWs = { readyState: WebSocket.CONNECTING } as unknown as WebSocket;
+      (client as unknown as { ws: WebSocket | null }).ws = mockWs;
+      expect(client.connected).toBe(false);
+    });
+
+    it('returns false in direct mode when ws CLOSED', () => {
+      stubChromeExtension();
+      const client = new NanobotWsClient(settings);
+      const mockWs = { readyState: WebSocket.CLOSED } as unknown as WebSocket;
       (client as unknown as { ws: WebSocket | null }).ws = mockWs;
       expect(client.connected).toBe(false);
     });
@@ -472,10 +516,238 @@ describe('NanobotWsClient', () => {
       const client = new NanobotWsClient(settings);
       expect(() => client.disconnect()).not.toThrow();
     });
+
+    it('handles relay disconnect when _relayListener is null', () => {
+      stubContentScript();
+      const client = new NanobotWsClient(settings);
+      (client as unknown as { _relayed: boolean })._relayed = true;
+      (client as unknown as { _relayConnected: boolean })._relayConnected = true;
+      (client as unknown as { _relayListener: unknown })._relayListener = null;
+
+      expect(() => client.disconnect()).not.toThrow();
+      expect((client as unknown as { _relayed: boolean })._relayed).toBe(false);
+      expect((client as unknown as { _chatId: string | null }).chatId).toBeNull();
+    });
   });
 
   // =========================================================================
-  // _connectRelay timeout
+  // _connectDirect
+  // =========================================================================
+  describe('_connectDirect', () => {
+    it('resolves when WebSocket opens', async () => {
+      vi.useRealTimers();
+      stubChromeExtension();
+      const client = new NanobotWsClient(settings);
+      const issueTokenSpy = vi.spyOn(
+        client as unknown as { _issueToken: () => Promise<string> },
+        '_issueToken',
+      ).mockResolvedValue('tok');
+
+      const allHandlers: Record<string, (() => void)[]> = {};
+      const mockWs = {
+        readyState: WebSocket.CONNECTING,
+        send: vi.fn(),
+        close: vi.fn(),
+        addEventListener: vi.fn((event: string, handler: () => void) => {
+          if (!allHandlers[event]) allHandlers[event] = [];
+          allHandlers[event].push(handler);
+        }),
+        removeEventListener: vi.fn(),
+      } as unknown as WebSocket;
+
+      vi.stubGlobal('WebSocket', vi.fn().mockImplementation(() => mockWs));
+
+      const connectPromise = client.connect();
+      await new Promise<void>((resolve) => {
+        const check = () => {
+          if (allHandlers['open'] && allHandlers['open'].length > 0) resolve();
+          else setTimeout(check, 1);
+        };
+        setTimeout(check, 1);
+      });
+      // Call the first 'open' handler (the one that calls resolve)
+      allHandlers['open']![0]();
+      await connectPromise;
+
+      expect((client as unknown as { ws: WebSocket | null }).ws).toBe(mockWs);
+      expect((client as unknown as { _relayed: boolean })._relayed).toBe(false);
+      issueTokenSpy.mockRestore();
+      vi.useFakeTimers();
+    });
+
+    it('rejects when WebSocket errors before open', async () => {
+      vi.useRealTimers();
+      stubChromeExtension();
+      const client = new NanobotWsClient(settings);
+
+      const allHandlers: Record<string, (() => void)[]> = {};
+      const mockWs = {
+        readyState: WebSocket.CONNECTING,
+        send: vi.fn(),
+        close: vi.fn(),
+        addEventListener: vi.fn((event: string, handler: () => void) => {
+          if (!allHandlers[event]) allHandlers[event] = [];
+          allHandlers[event].push(handler);
+        }),
+        removeEventListener: vi.fn(),
+      } as unknown as WebSocket;
+
+      vi.stubGlobal('WebSocket', vi.fn().mockImplementation(() => mockWs));
+
+      let capturedError: Error | undefined;
+      const connectPromise = (client as unknown as { _connectDirect: (url: string) => Promise<void> })
+        ._connectDirect('ws://test')
+        .catch((e: unknown) => { capturedError = e as Error; });
+
+      // Call ALL error handlers (the first one calls reject)
+      const errorHandlers = allHandlers['error'] || [];
+      for (const h of errorHandlers) h();
+
+      await connectPromise;
+
+      expect(capturedError).toBeInstanceOf(Error);
+      expect(capturedError!.message).toBe('WebSocket connection failed');
+      vi.useFakeTimers();
+    });
+
+    it('handles WebSocket message events', async () => {
+      vi.useRealTimers();
+      stubChromeExtension();
+      const client = new NanobotWsClient(settings);
+      const issueTokenSpy = vi.spyOn(
+        client as unknown as { _issueToken: () => Promise<string> },
+        '_issueToken',
+      ).mockResolvedValue('tok');
+
+      const messageListener = vi.fn();
+      client.on('message', messageListener);
+
+      const allHandlers: Record<string, ((...args: unknown[]) => void)[]> = {};
+      const mockWs = {
+        readyState: WebSocket.OPEN,
+        send: vi.fn(),
+        close: vi.fn(),
+        addEventListener: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+          if (!allHandlers[event]) allHandlers[event] = [];
+          allHandlers[event].push(handler);
+        }),
+        removeEventListener: vi.fn(),
+      } as unknown as WebSocket;
+
+      vi.stubGlobal('WebSocket', vi.fn().mockImplementation(() => mockWs));
+
+      const connectPromise = client.connect();
+      await new Promise<void>((resolve) => {
+        const check = () => {
+          if (allHandlers['open'] && allHandlers['open'].length > 0) resolve();
+          else setTimeout(check, 1);
+        };
+        setTimeout(check, 1);
+      });
+      allHandlers['open']![0]();
+      await connectPromise;
+
+      // Call the message handler (first one, which calls _handleFrame)
+      allHandlers['message']![0]({ data: JSON.stringify({ event: 'message', text: 'hello' }) });
+      expect(messageListener).toHaveBeenCalledWith({ event: 'message', text: 'hello' });
+
+      issueTokenSpy.mockRestore();
+      vi.useFakeTimers();
+    });
+
+    it('handles WebSocket close events', async () => {
+      vi.useRealTimers();
+      stubChromeExtension();
+      const client = new NanobotWsClient(settings);
+      const issueTokenSpy = vi.spyOn(
+        client as unknown as { _issueToken: () => Promise<string> },
+        '_issueToken',
+      ).mockResolvedValue('tok');
+
+      const closeListener = vi.fn();
+      client.on('close', closeListener);
+
+      const allHandlers: Record<string, ((...args: unknown[]) => void)[]> = {};
+      const mockWs = {
+        readyState: WebSocket.OPEN,
+        send: vi.fn(),
+        close: vi.fn(),
+        addEventListener: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+          if (!allHandlers[event]) allHandlers[event] = [];
+          allHandlers[event].push(handler);
+        }),
+        removeEventListener: vi.fn(),
+      } as unknown as WebSocket;
+
+      vi.stubGlobal('WebSocket', vi.fn().mockImplementation(() => mockWs));
+
+      const connectPromise = client.connect();
+      await new Promise<void>((resolve) => {
+        const check = () => {
+          if (allHandlers['open'] && allHandlers['open'].length > 0) resolve();
+          else setTimeout(check, 1);
+        };
+        setTimeout(check, 1);
+      });
+      allHandlers['open']![0]();
+      await connectPromise;
+
+      allHandlers['close']![0]({ code: 1000, reason: 'normal' });
+      expect(closeListener).toHaveBeenCalledWith({ code: 1000, reason: 'normal' });
+      expect((client as unknown as { ws: WebSocket | null }).ws).toBeNull();
+
+      issueTokenSpy.mockRestore();
+      vi.useFakeTimers();
+    });
+
+    it('handles WebSocket error events', async () => {
+      vi.useRealTimers();
+      stubChromeExtension();
+      const client = new NanobotWsClient(settings);
+      const issueTokenSpy = vi.spyOn(
+        client as unknown as { _issueToken: () => Promise<string> },
+        '_issueToken',
+      ).mockResolvedValue('tok');
+
+      const errorListener = vi.fn();
+      client.on('error', errorListener);
+
+      const allHandlers: Record<string, (() => void)[]> = {};
+      const mockWs = {
+        readyState: WebSocket.OPEN,
+        send: vi.fn(),
+        close: vi.fn(),
+        addEventListener: vi.fn((event: string, handler: () => void) => {
+          if (!allHandlers[event]) allHandlers[event] = [];
+          allHandlers[event].push(handler);
+        }),
+        removeEventListener: vi.fn(),
+      } as unknown as WebSocket;
+
+      vi.stubGlobal('WebSocket', vi.fn().mockImplementation(() => mockWs));
+
+      const connectPromise = client.connect();
+      await new Promise<void>((resolve) => {
+        const check = () => {
+          if (allHandlers['open'] && allHandlers['open'].length > 0) resolve();
+          else setTimeout(check, 1);
+        };
+        setTimeout(check, 1);
+      });
+      allHandlers['open']![0]();
+      await connectPromise;
+
+      // Call ALL error handlers
+      for (const h of allHandlers['error'] || []) h();
+      expect(errorListener).toHaveBeenCalledWith({});
+
+      issueTokenSpy.mockRestore();
+      vi.useFakeTimers();
+    });
+  });
+
+  // =========================================================================
+  // _connectRelay
   // =========================================================================
   describe('_connectRelay', () => {
     it('throws on relay timeout', async () => {
@@ -484,26 +756,178 @@ describe('NanobotWsClient', () => {
 
       (chrome.runtime.sendMessage as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
 
-      // Mock _issueToken to return a token directly
       const issueTokenSpy = vi.spyOn(
         client as unknown as { _issueToken: () => Promise<string> },
         '_issueToken',
       ).mockResolvedValue('tok');
 
-      // Capture the rejection in a variable; attach .catch immediately
       let capturedError: Error | undefined;
       const rawPromise = (client as unknown as { _connectRelay: (url: string) => Promise<void> })
         ._connectRelay('ws://127.0.0.1:8765/ws?token=tok')
         .catch((err) => { capturedError = err; });
 
-      // Advance time past the 10s timeout
       await vi.advanceTimersByTimeAsync(10500);
-
-      // Wait for the promise to settle
       await rawPromise;
 
       expect(capturedError).toBeInstanceOf(Error);
       expect(capturedError!.message).toBe('WebSocket relay timeout');
+
+      issueTokenSpy.mockRestore();
+    });
+
+    it('throws when relay connect returns ok: false', async () => {
+      stubContentScript();
+      const client = new NanobotWsClient(settings);
+
+      (chrome.runtime.sendMessage as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: false });
+
+      const issueTokenSpy = vi.spyOn(
+        client as unknown as { _issueToken: () => Promise<string> },
+        '_issueToken',
+      ).mockResolvedValue('tok');
+
+      await expect(
+        (client as unknown as { _connectRelay: (url: string) => Promise<void> })
+          ._connectRelay('ws://127.0.0.1:8765/ws?token=tok'),
+      ).rejects.toThrow('WebSocket relay failed');
+
+      issueTokenSpy.mockRestore();
+    });
+
+    it('resolves when relay receives NB_WS_OPEN', async () => {
+      stubContentScript();
+      const client = new NanobotWsClient(settings);
+
+      (chrome.runtime.sendMessage as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
+
+      const issueTokenSpy = vi.spyOn(
+        client as unknown as { _issueToken: () => Promise<string> },
+        '_issueToken',
+      ).mockResolvedValue('tok');
+
+      const connectPromise = (client as unknown as { _connectRelay: (url: string) => Promise<void> })
+        ._connectRelay('ws://127.0.0.1:8765/ws?token=tok');
+
+      // Simulate relay open message
+      const relayListener = (chrome.runtime.onMessage.addListener as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      relayListener({ type: 'NB_WS_OPEN' });
+
+      await vi.advanceTimersByTimeAsync(100);
+      await connectPromise;
+
+      expect((client as unknown as { _relayConnected: boolean })._relayConnected).toBe(true);
+
+      issueTokenSpy.mockRestore();
+    });
+
+    it('handles NB_WS_MESSAGE events via relay', async () => {
+      stubContentScript();
+      const client = new NanobotWsClient(settings);
+
+      (chrome.runtime.sendMessage as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
+
+      const issueTokenSpy = vi.spyOn(
+        client as unknown as { _issueToken: () => Promise<string> },
+        '_issueToken',
+      ).mockResolvedValue('tok');
+
+      const deltaListener = vi.fn();
+      client.on('delta', deltaListener);
+
+      const connectPromise = (client as unknown as { _connectRelay: (url: string) => Promise<void> })
+        ._connectRelay('ws://127.0.0.1:8765/ws?token=tok');
+
+      // Open the relay
+      const relayListener = (chrome.runtime.onMessage.addListener as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      relayListener({ type: 'NB_WS_OPEN' });
+      await vi.advanceTimersByTimeAsync(100);
+      await connectPromise;
+
+      // Send a message through relay
+      relayListener({ type: 'NB_WS_MESSAGE', data: JSON.stringify({ event: 'delta', text: 'hi' }) });
+      expect(deltaListener).toHaveBeenCalledWith({ event: 'delta', text: 'hi' });
+
+      issueTokenSpy.mockRestore();
+    });
+
+    it('handles NB_WS_CLOSE events via relay', async () => {
+      stubContentScript();
+      const client = new NanobotWsClient(settings);
+
+      (chrome.runtime.sendMessage as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
+
+      const issueTokenSpy = vi.spyOn(
+        client as unknown as { _issueToken: () => Promise<string> },
+        '_issueToken',
+      ).mockResolvedValue('tok');
+
+      const closeListener = vi.fn();
+      client.on('close', closeListener);
+
+      const connectPromise = (client as unknown as { _connectRelay: (url: string) => Promise<void> })
+        ._connectRelay('ws://127.0.0.1:8765/ws?token=tok');
+
+      const relayListener = (chrome.runtime.onMessage.addListener as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      relayListener({ type: 'NB_WS_OPEN' });
+      await vi.advanceTimersByTimeAsync(100);
+      await connectPromise;
+
+      relayListener({ type: 'NB_WS_CLOSE', code: 1000, reason: 'bye' });
+      expect(closeListener).toHaveBeenCalledWith({ code: 1000, reason: 'bye' });
+      expect((client as unknown as { _relayConnected: boolean })._relayConnected).toBe(false);
+
+      issueTokenSpy.mockRestore();
+    });
+
+    it('handles NB_WS_ERROR events via relay', async () => {
+      stubContentScript();
+      const client = new NanobotWsClient(settings);
+
+      (chrome.runtime.sendMessage as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
+
+      const issueTokenSpy = vi.spyOn(
+        client as unknown as { _issueToken: () => Promise<string> },
+        '_issueToken',
+      ).mockResolvedValue('tok');
+
+      const errorListener = vi.fn();
+      client.on('error', errorListener);
+
+      const connectPromise = (client as unknown as { _connectRelay: (url: string) => Promise<void> })
+        ._connectRelay('ws://127.0.0.1:8765/ws?token=tok');
+
+      const relayListener = (chrome.runtime.onMessage.addListener as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      relayListener({ type: 'NB_WS_OPEN' });
+      await vi.advanceTimersByTimeAsync(100);
+      await connectPromise;
+
+      relayListener({ type: 'NB_WS_ERROR' });
+      expect(errorListener).toHaveBeenCalledWith({});
+
+      issueTokenSpy.mockRestore();
+    });
+
+    it('ignores unknown relay message types', async () => {
+      stubContentScript();
+      const client = new NanobotWsClient(settings);
+
+      (chrome.runtime.sendMessage as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
+
+      const issueTokenSpy = vi.spyOn(
+        client as unknown as { _issueToken: () => Promise<string> },
+        '_issueToken',
+      ).mockResolvedValue('tok');
+
+      const connectPromise = (client as unknown as { _connectRelay: (url: string) => Promise<void> })
+        ._connectRelay('ws://127.0.0.1:8765/ws?token=tok');
+
+      const relayListener = (chrome.runtime.onMessage.addListener as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      relayListener({ type: 'NB_WS_OPEN' });
+      await vi.advanceTimersByTimeAsync(100);
+      await connectPromise;
+
+      // Send unknown message type - should not throw
+      expect(() => relayListener({ type: 'NB_UNKNOWN' })).not.toThrow();
 
       issueTokenSpy.mockRestore();
     });
@@ -525,7 +949,6 @@ describe('NanobotWsClient', () => {
       } as unknown as WebSocket;
       (client as unknown as { ws: WebSocket | null }).ws = mockWs;
 
-      // Mock _issueToken and _connectDirect
       const issueSpy = vi.spyOn(
         client as unknown as { _issueToken: () => Promise<string> },
         '_issueToken',
@@ -538,6 +961,50 @@ describe('NanobotWsClient', () => {
       await client.connect();
 
       expect(mockWs.close).toHaveBeenCalled();
+      expect(issueSpy).toHaveBeenCalled();
+      expect(directSpy).toHaveBeenCalled();
+
+      issueSpy.mockRestore();
+      directSpy.mockRestore();
+    });
+
+    it('uses relay path for content scripts', async () => {
+      stubContentScript();
+      const client = new NanobotWsClient(settings);
+
+      const issueSpy = vi.spyOn(
+        client as unknown as { _issueToken: () => Promise<string> },
+        '_issueToken',
+      ).mockResolvedValue('tok');
+      const relaySpy = vi.spyOn(
+        client as unknown as { _connectRelay: (url: string) => Promise<void> },
+        '_connectRelay',
+      ).mockResolvedValue();
+
+      await client.connect();
+
+      expect(issueSpy).toHaveBeenCalled();
+      expect(relaySpy).toHaveBeenCalled();
+
+      issueSpy.mockRestore();
+      relaySpy.mockRestore();
+    });
+
+    it('uses direct path for extension pages', async () => {
+      stubChromeExtension();
+      const client = new NanobotWsClient(settings);
+
+      const issueSpy = vi.spyOn(
+        client as unknown as { _issueToken: () => Promise<string> },
+        '_issueToken',
+      ).mockResolvedValue('tok');
+      const directSpy = vi.spyOn(
+        client as unknown as { _connectDirect: (url: string) => Promise<void> },
+        '_connectDirect',
+      ).mockResolvedValue();
+
+      await client.connect();
+
       expect(issueSpy).toHaveBeenCalled();
       expect(directSpy).toHaveBeenCalled();
 

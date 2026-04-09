@@ -5,19 +5,33 @@
 ```
 nanobot-extension/
 ├── manifest.json              # MV3 manifest — permissions, commands, side panel config
-├── background/
-│   └── service-worker.js      # Routes icon clicks and Ctrl+K to the right handler
-├── lib/
-│   ├── storage.js             # Read/write settings from chrome.storage.local
-│   ├── session.js             # Session CRUD — create, list, switch, delete, append
-│   └── ws-client.js           # WebSocket client with automatic token issuance
-├── sidepanel/
-│   ├── index.html             # Side panel markup
-│   ├── style.css              # Dark theme, all tokens as CSS custom properties
-│   └── app.js                 # Session list UI, chat rendering, settings form
-├── quickchat/
-│   ├── quickchat.js           # Content script — builds the overlay DOM on injection
-│   └── style.css              # Overlay styles, every selector prefixed with #nb-qc-
+├── src/                       # TypeScript source
+│   ├── background/
+│   │   └── service-worker.ts  # Routes icon clicks and Ctrl+K to the right handler
+│   ├── lib/
+│   │   ├── types.ts           # Shared TypeScript interfaces
+│   │   ├── storage.ts         # Read/write settings from chrome.storage.local
+│   │   ├── session.ts         # Session CRUD — create, list, switch, delete, append
+│   │   └── ws-client.ts       # WebSocket client with automatic token issuance
+│   ├── sidepanel/
+│   │   ├── index.html         # Side panel markup
+│   │   ├── style.css          # Dark theme, all tokens as CSS custom properties
+│   │   └── app.ts             # Session list UI, chat rendering, settings form
+│   └── quickchat/
+│       ├── quickchat.ts       # Content script — builds the overlay DOM on injection
+│       └── style.css          # Overlay styles, every selector prefixed with #nb-qc-
+├── dist/                      # Built output (committed for end users)
+│   ├── manifest.json
+│   ├── background/service-worker.js
+│   ├── sidepanel/app.js, index.html, style.css
+│   ├── quickchat/quickchat.js, style.css
+│   └── icons/
+├── scripts/
+│   └── build.mjs              # Custom build script (3 separate Vite builds for IIFE)
+├── package.json
+├── tsconfig.json
+├── vite.config.ts
+├── vitest.config.ts
 └── icons/
     ├── icon16.png
     ├── icon48.png
@@ -43,7 +57,7 @@ On open, it loads sessions from storage, renders the session list, and auto-conn
 
 A content script injected into the host page's isolated world. It can access `chrome.storage` but shares the DOM with the page (without access to the page's JS).
 
-On first Ctrl+K: the service worker injects `lib/*.js` and `quickchat/quickchat.js` into the tab, plus the overlay CSS. The script creates a backdrop and a floating container, then auto-connects to Nanobot.
+On first Ctrl+K: the service worker injects `quickchat/quickchat.js` (a self-contained IIFE bundle that includes all shared lib code) into the tab, plus the overlay CSS. The script creates a backdrop and a floating container, then auto-connects to Nanobot.
 
 On subsequent Ctrl+K presses: the service worker sends a toggle message to the already-injected script, which shows or hides the overlay.
 
@@ -89,7 +103,7 @@ The quick chat overlay needs to coexist with arbitrary web pages. Every CSS sele
 
 ## Design Decisions
 
-**No build step.** The extension ships as plain JS/CSS/HTML. This keeps the contribution barrier low and eliminates toolchain maintenance. If the project grows to need a framework or bundler, the modular structure makes that migration straightforward.
+**TypeScript with Vite build.** Source code lives in `src/` as TypeScript. A custom build script (`scripts/build.mjs`) runs three separate Vite builds to produce self-contained IIFE bundles in `dist/`. Each entry point (service-worker, sidepanel, quickchat) bundles its own copy of shared lib code. The `dist/` directory is committed to git so end users can load it directly without any build step.
 
 **No Shadow DOM for quick chat.** Shadow DOM would give perfect isolation but adds complexity (event forwarding, slot management, style inheritance). Prefixed selectors are simpler and sufficient for our use case.
 

@@ -10,17 +10,33 @@
 
 Open a side panel for persistent multi-session conversations, or hit <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>K</kbd> for a quick question on any page.
 
-**No build tools. No frameworks. Just an extension.**
+**TypeScript + Vite. Tested with Vitest.**
 
 ---
 
 ## Install
 
+### End Users
+
 ```bash
 git clone https://github.com/chengyongru/Nanopilot.git
 ```
 
-Then in Chrome: `chrome://extensions` → enable **Developer mode** → **Load unpacked** → select the repo folder.
+Then in Chrome: `chrome://extensions` → enable **Developer mode** → **Load unpacked** → select the **`dist/`** folder.
+
+### Developers
+
+```bash
+git clone https://github.com/chengyongru/Nanopilot.git
+cd Nanopilot
+npm install
+npm run build        # build to dist/
+npm test             # run tests
+npm run test:coverage # tests with coverage report
+npm run dev          # watch mode
+```
+
+Load the **`dist/`** folder in Chrome for development.
 
 Pin it to your toolbar via the puzzle icon.
 

@@ -96,7 +96,7 @@ describe('quickchat', () => {
             if (keys.includes('nb_active_session')) result.nb_active_session = null;
             return result;
           }),
-          set: vi.fn(),
+          set: vi.fn().mockResolvedValue(undefined),
         },
       },
     });
@@ -294,7 +294,9 @@ describe('quickchat', () => {
 
   it('should hide on Escape key via document keydown', async () => {
     await import('../quickchat');
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    // Dispatch from an element within the overlay (not a host input)
+    const header = document.querySelector('#nb-qc-header') as HTMLElement;
+    header.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     await vi.waitFor(() => {
       expect(document.body.contains(document.querySelector('#nb-qc-container'))).toBe(false);
     });
@@ -349,11 +351,14 @@ describe('quickchat', () => {
   // =========================================================================
   it('should create a new session when none exist', async () => {
     await import('../quickchat');
-    expect(chrome.storage.local.set).toHaveBeenCalledWith(
-      expect.objectContaining({
-        nb_sessions: expect.any(Object),
-      }),
-    );
+    // Session creation is debounced — use vi.waitFor
+    await vi.waitFor(() => {
+      expect(chrome.storage.local.set).toHaveBeenCalledWith(
+        expect.objectContaining({
+          nb_sessions: expect.any(Object),
+        }),
+      );
+    });
   });
 
   it('should reuse existing session when one exists', async () => {
@@ -400,7 +405,7 @@ describe('quickchat', () => {
     const existingSession = {
       'hist-id': {
         id: 'hist-id',
-        title: 'History Chat',
+        title: 'Quick Chat',
         messages: [
           { role: 'user', content: 'Hello', timestamp: Date.now() - 1000, done: true },
           { role: 'assistant', content: 'Hi!', timestamp: Date.now(), done: true },
@@ -722,7 +727,7 @@ describe('quickchat', () => {
             if (keys.includes('nb_active_session')) result.nb_active_session = null;
             return result;
           }),
-          set: vi.fn(),
+          set: vi.fn().mockResolvedValue(undefined),
         },
       },
     });

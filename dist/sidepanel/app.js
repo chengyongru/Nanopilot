@@ -3,16 +3,43 @@
   class SessionManager {
     sessions = {};
     activeId = null;
+    _persistTimer = null;
+    _persistPending = false;
     async load() {
       const data = await chrome.storage.local.get(["nb_sessions", "nb_active_session"]);
       this.sessions = data.nb_sessions || {};
       this.activeId = data.nb_active_session || null;
     }
+    /** Debounced persist — only writes once per 500ms during rapid calls. */
     _persist() {
-      chrome.storage.local.set({
-        nb_sessions: this.sessions,
-        nb_active_session: this.activeId
-      });
+      if (this._persistPending) return;
+      this._persistPending = true;
+      this._persistTimer = setTimeout(() => {
+        this._persistPending = false;
+        this._persistTimer = null;
+        chrome.storage.local.set({
+          nb_sessions: this.sessions,
+          nb_active_session: this.activeId
+        }).catch((err) => {
+          console.error("[session] persist failed:", err);
+        });
+      }, 500);
+    }
+    /** Flush any debounced persist immediately. */
+    async _flushPersist() {
+      if (this._persistTimer) {
+        clearTimeout(this._persistTimer);
+        this._persistTimer = null;
+        this._persistPending = false;
+      }
+      try {
+        await chrome.storage.local.set({
+          nb_sessions: this.sessions,
+          nb_active_session: this.activeId
+        });
+      } catch (err) {
+        console.error("[session] persist failed:", err);
+      }
     }
     create(title) {
       const id = crypto.randomUUID();
@@ -50,6 +77,7 @@
       this._persist();
     }
     appendToLastAssistant(sessionId, text2) {
+      if (!text2) return;
       const s = this.sessions[sessionId];
       if (!s) return;
       const last = s.messages[s.messages.length - 1];
@@ -67,14 +95,14 @@
       const last = s.messages[s.messages.length - 1];
       if (last && last.role === "assistant") {
         last.done = true;
-        this._persist();
+        this._flushPersist();
       }
     }
     delete(id) {
       delete this.sessions[id];
       if (this.activeId === id) {
-        const keys = Object.keys(this.sessions);
-        this.activeId = keys.length ? keys[keys.length - 1] : null;
+        const remaining = Object.values(this.sessions).sort((a, b2) => b2.updatedAt - a.updatedAt);
+        this.activeId = remaining.length > 0 ? remaining[0].id : null;
       }
       this._persist();
     }
@@ -95,6 +123,7 @@
     _relayed = false;
     _relayConnected = false;
     _relayListener = null;
+    _relayAbort = false;
     constructor(settings) {
       this.settings = settings;
     }
@@ -163,6 +192,7 @@
     }
     _connectDirect(url) {
       this._relayed = false;
+      let errored = false;
       return new Promise((resolve, reject) => {
         this.ws = new WebSocket(url);
         const onOpen = () => {
@@ -173,21 +203,27 @@
         const onError = () => {
           this.ws.removeEventListener("open", onOpen);
           this.ws.removeEventListener("error", onError);
+          errored = true;
           reject(new Error("WebSocket connection failed"));
         };
         this.ws.addEventListener("open", onOpen);
         this.ws.addEventListener("error", onError);
         this.ws.addEventListener("message", (e) => this._handleFrame(e.data));
         this.ws.addEventListener("close", (e) => {
-          this._emit("close", { code: e.code, reason: e.reason });
+          if (!errored) {
+            this._emit("close", { code: e.code, reason: e.reason });
+          }
           this.ws = null;
         });
-        this.ws.addEventListener("error", () => this._emit("error", {}));
+        this.ws.addEventListener("error", () => {
+          this._emit("error", {});
+        });
       });
     }
     async _connectRelay(url) {
       this._relayed = true;
       this._relayConnected = false;
+      this._relayAbort = false;
       this._relayListener = (msg) => {
         if (msg.type === "NB_WS_MESSAGE") this._handleFrame(msg.data);
         else if (msg.type === "NB_WS_OPEN") {
@@ -202,21 +238,40 @@
       chrome.runtime.onMessage.addListener(this._relayListener);
       const result = await chrome.runtime.sendMessage({ type: "NB_WS_CONNECT", url });
       if (!result?.ok) {
+        this._removeRelayListener();
         throw new Error("WebSocket relay failed");
       }
-      await new Promise((resolve, reject) => {
-        const timeout = setTimeout(
-          () => reject(new Error("WebSocket relay timeout")),
-          1e4
-        );
-        const check = () => {
-          if (this._relayConnected) {
-            clearTimeout(timeout);
-            resolve();
-          } else setTimeout(check, 50);
-        };
-        check();
-      });
+      try {
+        await new Promise((resolve, reject) => {
+          const timeout = setTimeout(
+            () => {
+              this._relayAbort = true;
+              this._removeRelayListener();
+              reject(new Error("WebSocket relay timeout"));
+            },
+            1e4
+          );
+          const check = () => {
+            if (this._relayAbort) return;
+            if (this._relayConnected) {
+              clearTimeout(timeout);
+              resolve();
+            } else {
+              setTimeout(check, 50);
+            }
+          };
+          check();
+        });
+      } catch {
+        this._removeRelayListener();
+        throw new Error("WebSocket relay timeout");
+      }
+    }
+    _removeRelayListener() {
+      if (this._relayListener) {
+        chrome.runtime.onMessage.removeListener(this._relayListener);
+        this._relayListener = null;
+      }
     }
     _handleFrame(raw) {
       try {
@@ -250,13 +305,11 @@
       this.send(JSON.stringify(obj));
     }
     disconnect() {
+      this._relayAbort = true;
       if (this._relayed) {
         chrome.runtime.sendMessage({ type: "NB_WS_CLOSE" });
         this._relayConnected = false;
-        if (this._relayListener) {
-          chrome.runtime.onMessage.removeListener(this._relayListener);
-          this._relayListener = null;
-        }
+        this._removeRelayListener();
         this._relayed = false;
       } else if (this.ws) {
         this.ws.close();
@@ -283,6 +336,24 @@
   }
   async function saveSettings(settings) {
     await chrome.storage.local.set({ nb_settings: settings });
+  }
+  function validateSettings(s) {
+    if (s.host !== void 0 && !s.host.trim()) {
+      return "Host must not be empty";
+    }
+    if (s.port !== void 0) {
+      const port = typeof s.port === "string" ? parseInt(s.port, 10) : s.port;
+      if (isNaN(port) || port < 1 || port > 65535) {
+        return "Port must be a number between 1 and 65535";
+      }
+    }
+    if (s.path !== void 0 && s.path.trim() && !s.path.trim().startsWith("/")) {
+      return "WS Path must start with /";
+    }
+    if (s.tokenIssuePath !== void 0 && s.tokenIssuePath.trim() && !s.tokenIssuePath.trim().startsWith("/")) {
+      return "Token Issue Path must start with /";
+    }
+    return null;
   }
   function z() {
     return { async: false, breaks: false, extensions: null, gfm: true, hooks: null, pedantic: false, renderer: null, silent: false, tokenizer: null, walkTokens: null };
@@ -54435,23 +54506,19 @@ Please report this to https://github.com/markedjs/marked.`, e) {
       code({ text: text2, lang }) {
         const language = lang && HighlightJS.getLanguage(lang) ? lang : "";
         const highlighted = language ? HighlightJS.highlight(text2, { language }).value : HighlightJS.highlightAuto(text2).value;
-        return `<pre><code class="hljs${language ? ` language-${language}` : ""}">${highlighted}</code></pre>`;
+        return `<pre><button class="nb-copy-btn">Copy</button><code class="hljs${language ? ` language-${language}` : ""}">${highlighted}</code></pre>`;
       }
     }
   });
-  purify.addHook("uponSanitizeAttribute", (node, data) => {
-    if (data.attrName === "class" && data.tagName === "code") {
-      node.setAttribute("class", data.attrValue || "");
-    }
-  });
   function renderMarkdown(raw) {
-    const html2 = g.parse(raw);
+    const html2 = g.parse(raw, { async: false });
     return purify.sanitize(html2, {
-      ADD_TAGS: ["pre", "code", "table", "thead", "tbody", "tr", "th", "td"],
       ADD_ATTR: ["class"]
     });
   }
   function initCopyButtons(container) {
+    if (container.dataset.nbCopyInit === "true") return;
+    container.dataset.nbCopyInit = "true";
     container.addEventListener("click", (e) => {
       const target = e.target;
       const btn = target.closest(".nb-copy-btn");
@@ -54460,18 +54527,34 @@ Please report this to https://github.com/markedjs/marked.`, e) {
       if (!pre) return;
       const code = pre.querySelector("code");
       if (!code) return;
-      void navigator.clipboard.writeText(code.textContent || "").then(() => {
-        btn.textContent = "Copied!";
-        setTimeout(() => {
-          btn.textContent = "Copy";
-        }, 1500);
-      });
+      const text2 = code.textContent || "";
+      if (navigator.clipboard?.writeText) {
+        void navigator.clipboard.writeText(text2).then(() => {
+          btn.textContent = "Copied!";
+          setTimeout(() => {
+            btn.textContent = "Copy";
+          }, 1500);
+        });
+      }
     });
   }
+  function esc(str) {
+    return str.replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;"
+    })[c]);
+  }
+  const MAX_MESSAGE_LENGTH = 32e3;
   (async function() {
     const sessions = new SessionManager();
     let ws = null;
     let isStreaming = false;
+    let connectedSessionId = null;
+    let streamAccumulator = "";
+    let streamRAF = 0;
     const $2 = (sel) => document.querySelector(sel);
     const $input = (sel) => document.querySelector(sel);
     const sessionListEl = $2("#session-list");
@@ -54486,6 +54569,7 @@ Please report this to https://github.com/markedjs/marked.`, e) {
     const settingsOverlay = $2("#settings-overlay");
     const settingsForm = $2("#settings-form");
     const btnCancel = $2("#btn-settings-cancel");
+    const settingsErrorEl = $2("#settings-error");
     await sessions.load();
     renderSessionList();
     if (sessions.activeId) {
@@ -54545,6 +54629,7 @@ Please report this to https://github.com/markedjs/marked.`, e) {
       msgInput.focus();
     }
     async function deleteSession(id) {
+      if (!window.confirm("Delete this conversation? This cannot be undone.")) return;
       await disconnectWs();
       sessions.delete(id);
       renderSessionList();
@@ -54567,8 +54652,6 @@ Please report this to https://github.com/markedjs/marked.`, e) {
       });
       scrollToBottom();
     }
-    let streamAccumulator = "";
-    let streamRAF = 0;
     function appendMessageDOM(role, content, finalized) {
       const msgEl = document.createElement("div");
       msgEl.className = `msg ${role}`;
@@ -54603,14 +54686,18 @@ Please report this to https://github.com/markedjs/marked.`, e) {
     async function connectWs() {
       const session = sessions.getActive();
       if (!session) return;
+      await disconnectWs();
+      connectedSessionId = session.id;
       const settings = await loadSettings();
       ws = new NanobotWsClient(settings);
       setConnStatus("connecting");
       ws.on("ready", (data) => {
+        if (connectedSessionId !== sessions.activeId) return;
         const d = data;
         setConnStatus("connected", d.chat_id ? `chat ${d.chat_id.slice(0, 8)}` : "");
       });
       ws.on("message", (data) => {
+        if (connectedSessionId !== sessions.activeId) return;
         const d = data;
         const text2 = d.text || "";
         sessions.addMessage(session.id, "assistant", text2);
@@ -54620,6 +54707,7 @@ Please report this to https://github.com/markedjs/marked.`, e) {
         updateSendBtn();
       });
       ws.on("delta", (data) => {
+        if (connectedSessionId !== sessions.activeId) return;
         const d = data;
         const text2 = d.text || "";
         if (!isStreaming) {
@@ -54642,6 +54730,7 @@ Please report this to https://github.com/markedjs/marked.`, e) {
         sessions.appendToLastAssistant(session.id, text2);
       });
       ws.on("stream_end", () => {
+        if (connectedSessionId !== sessions.activeId) return;
         sessions.markLastAssistantDone(session.id);
         if (streamRAF) {
           cancelAnimationFrame(streamRAF);
@@ -54659,9 +54748,9 @@ Please report this to https://github.com/markedjs/marked.`, e) {
         updateSendBtn();
       });
       ws.on("close", () => {
-        setConnStatus("disconnected");
         isStreaming = false;
         updateSendBtn();
+        setConnStatus("disconnected");
       });
       ws.on("error", () => {
         setConnStatus("error", "Connection failed");
@@ -54679,26 +54768,39 @@ Please report this to https://github.com/markedjs/marked.`, e) {
         ws = null;
       }
       isStreaming = false;
+      connectedSessionId = null;
+      if (streamRAF) {
+        cancelAnimationFrame(streamRAF);
+        streamRAF = 0;
+      }
+      streamAccumulator = "";
     }
     async function sendMessage() {
       const text2 = msgInput.value.trim();
       if (!text2 || isStreaming) return;
+      if (text2.length > MAX_MESSAGE_LENGTH) {
+        setConnStatus("error", `Message too long (max ${MAX_MESSAGE_LENGTH} chars)`);
+        return;
+      }
       if (!ws?.connected) {
         setConnStatus("connecting");
         try {
           await connectWs();
         } catch {
           setConnStatus("error", "Connection failed");
+          updateSendBtn();
           return;
         }
-        await new Promise((r) => setTimeout(r, 300));
       }
       if (!ws?.connected) {
         setConnStatus("error", "Not connected");
+        updateSendBtn();
         return;
       }
       const session = sessions.getActive();
       if (!session) return;
+      if (connectedSessionId !== session.id) return;
+      btnSend.disabled = true;
       sessions.addMessage(session.id, "user", text2);
       appendMessageDOM("user", text2, true);
       msgInput.value = "";
@@ -54707,6 +54809,18 @@ Please report this to https://github.com/markedjs/marked.`, e) {
     }
     function updateSendBtn() {
       btnSend.disabled = isStreaming;
+    }
+    function showSettingsError(msg) {
+      if (settingsErrorEl) {
+        settingsErrorEl.textContent = msg;
+        settingsErrorEl.classList.remove("hidden");
+      }
+    }
+    function clearSettingsError() {
+      if (settingsErrorEl) {
+        settingsErrorEl.textContent = "";
+        settingsErrorEl.classList.add("hidden");
+      }
     }
     async function openSettings() {
       const s = await loadSettings();
@@ -54722,9 +54836,11 @@ Please report this to https://github.com/markedjs/marked.`, e) {
       if (issuePathEl) issuePathEl.value = s.tokenIssuePath;
       if (secretEl) secretEl.value = s.tokenIssueSecret;
       if (clientIdEl) clientIdEl.value = s.clientId;
+      clearSettingsError();
       settingsOverlay.classList.remove("hidden");
     }
     function closeSettings() {
+      clearSettingsError();
       settingsOverlay.classList.add("hidden");
     }
     async function saveSettingsFromForm() {
@@ -54734,15 +54850,22 @@ Please report this to https://github.com/markedjs/marked.`, e) {
       const issuePathEl = $input("#s-issue-path");
       const secretEl = $input("#s-secret");
       const clientIdEl = $input("#s-client-id");
-      const s = {
+      const portRaw = portEl?.value ?? "";
+      const port = parseInt(portRaw, 10);
+      const candidate = {
         host: hostEl?.value.trim() || DEFAULT_SETTINGS.host,
-        port: parseInt(portEl?.value ?? "", 10) || DEFAULT_SETTINGS.port,
+        port: isNaN(port) ? DEFAULT_SETTINGS.port : port,
         path: pathEl?.value.trim() || DEFAULT_SETTINGS.path,
         tokenIssuePath: issuePathEl?.value.trim() || DEFAULT_SETTINGS.tokenIssuePath,
         tokenIssueSecret: secretEl?.value ?? "",
         clientId: clientIdEl?.value.trim() || DEFAULT_SETTINGS.clientId
       };
-      await saveSettings(s);
+      const validationError = validateSettings(candidate);
+      if (validationError) {
+        showSettingsError(validationError);
+        return;
+      }
+      await saveSettings(candidate);
       closeSettings();
       if (sessions.activeId) {
         await connectWs();
@@ -54780,10 +54903,8 @@ Please report this to https://github.com/markedjs/marked.`, e) {
       if (eyeClosed) eyeClosed.style.display = showing ? "none" : "";
       toggleBtn.title = showing ? "Show password" : "Hide password";
     });
-    function esc(str) {
-      const d = document.createElement("div");
-      d.textContent = str;
-      return d.innerHTML;
-    }
+    window.addEventListener("pagehide", () => {
+      sessions._flushPersist();
+    });
   })();
 })();

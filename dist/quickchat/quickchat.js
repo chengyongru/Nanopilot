@@ -3,16 +3,43 @@
   class SessionManager {
     sessions = {};
     activeId = null;
+    _persistTimer = null;
+    _persistPending = false;
     async load() {
       const data = await chrome.storage.local.get(["nb_sessions", "nb_active_session"]);
       this.sessions = data.nb_sessions || {};
       this.activeId = data.nb_active_session || null;
     }
+    /** Debounced persist — only writes once per 500ms during rapid calls. */
     _persist() {
-      chrome.storage.local.set({
-        nb_sessions: this.sessions,
-        nb_active_session: this.activeId
-      });
+      if (this._persistPending) return;
+      this._persistPending = true;
+      this._persistTimer = setTimeout(() => {
+        this._persistPending = false;
+        this._persistTimer = null;
+        chrome.storage.local.set({
+          nb_sessions: this.sessions,
+          nb_active_session: this.activeId
+        }).catch((err) => {
+          console.error("[session] persist failed:", err);
+        });
+      }, 500);
+    }
+    /** Flush any debounced persist immediately. */
+    async _flushPersist() {
+      if (this._persistTimer) {
+        clearTimeout(this._persistTimer);
+        this._persistTimer = null;
+        this._persistPending = false;
+      }
+      try {
+        await chrome.storage.local.set({
+          nb_sessions: this.sessions,
+          nb_active_session: this.activeId
+        });
+      } catch (err) {
+        console.error("[session] persist failed:", err);
+      }
     }
     create(title) {
       const id = crypto.randomUUID();
@@ -50,6 +77,7 @@
       this._persist();
     }
     appendToLastAssistant(sessionId, text2) {
+      if (!text2) return;
       const s = this.sessions[sessionId];
       if (!s) return;
       const last = s.messages[s.messages.length - 1];
@@ -67,14 +95,14 @@
       const last = s.messages[s.messages.length - 1];
       if (last && last.role === "assistant") {
         last.done = true;
-        this._persist();
+        this._flushPersist();
       }
     }
     delete(id) {
       delete this.sessions[id];
       if (this.activeId === id) {
-        const keys = Object.keys(this.sessions);
-        this.activeId = keys.length ? keys[keys.length - 1] : null;
+        const remaining = Object.values(this.sessions).sort((a, b2) => b2.updatedAt - a.updatedAt);
+        this.activeId = remaining.length > 0 ? remaining[0].id : null;
       }
       this._persist();
     }
@@ -107,6 +135,7 @@
     _relayed = false;
     _relayConnected = false;
     _relayListener = null;
+    _relayAbort = false;
     constructor(settings) {
       this.settings = settings;
     }
@@ -175,6 +204,7 @@
     }
     _connectDirect(url) {
       this._relayed = false;
+      let errored = false;
       return new Promise((resolve, reject) => {
         this.ws = new WebSocket(url);
         const onOpen = () => {
@@ -185,21 +215,27 @@
         const onError = () => {
           this.ws.removeEventListener("open", onOpen);
           this.ws.removeEventListener("error", onError);
+          errored = true;
           reject(new Error("WebSocket connection failed"));
         };
         this.ws.addEventListener("open", onOpen);
         this.ws.addEventListener("error", onError);
         this.ws.addEventListener("message", (e) => this._handleFrame(e.data));
         this.ws.addEventListener("close", (e) => {
-          this._emit("close", { code: e.code, reason: e.reason });
+          if (!errored) {
+            this._emit("close", { code: e.code, reason: e.reason });
+          }
           this.ws = null;
         });
-        this.ws.addEventListener("error", () => this._emit("error", {}));
+        this.ws.addEventListener("error", () => {
+          this._emit("error", {});
+        });
       });
     }
     async _connectRelay(url) {
       this._relayed = true;
       this._relayConnected = false;
+      this._relayAbort = false;
       this._relayListener = (msg) => {
         if (msg.type === "NB_WS_MESSAGE") this._handleFrame(msg.data);
         else if (msg.type === "NB_WS_OPEN") {
@@ -214,21 +250,40 @@
       chrome.runtime.onMessage.addListener(this._relayListener);
       const result = await chrome.runtime.sendMessage({ type: "NB_WS_CONNECT", url });
       if (!result?.ok) {
+        this._removeRelayListener();
         throw new Error("WebSocket relay failed");
       }
-      await new Promise((resolve, reject) => {
-        const timeout = setTimeout(
-          () => reject(new Error("WebSocket relay timeout")),
-          1e4
-        );
-        const check = () => {
-          if (this._relayConnected) {
-            clearTimeout(timeout);
-            resolve();
-          } else setTimeout(check, 50);
-        };
-        check();
-      });
+      try {
+        await new Promise((resolve, reject) => {
+          const timeout = setTimeout(
+            () => {
+              this._relayAbort = true;
+              this._removeRelayListener();
+              reject(new Error("WebSocket relay timeout"));
+            },
+            1e4
+          );
+          const check = () => {
+            if (this._relayAbort) return;
+            if (this._relayConnected) {
+              clearTimeout(timeout);
+              resolve();
+            } else {
+              setTimeout(check, 50);
+            }
+          };
+          check();
+        });
+      } catch {
+        this._removeRelayListener();
+        throw new Error("WebSocket relay timeout");
+      }
+    }
+    _removeRelayListener() {
+      if (this._relayListener) {
+        chrome.runtime.onMessage.removeListener(this._relayListener);
+        this._relayListener = null;
+      }
     }
     _handleFrame(raw) {
       try {
@@ -262,13 +317,11 @@
       this.send(JSON.stringify(obj));
     }
     disconnect() {
+      this._relayAbort = true;
       if (this._relayed) {
         chrome.runtime.sendMessage({ type: "NB_WS_CLOSE" });
         this._relayConnected = false;
-        if (this._relayListener) {
-          chrome.runtime.onMessage.removeListener(this._relayListener);
-          this._relayListener = null;
-        }
+        this._removeRelayListener();
         this._relayed = false;
       } else if (this.ws) {
         this.ws.close();
@@ -54432,23 +54485,19 @@ Please report this to https://github.com/markedjs/marked.`, e) {
       code({ text: text2, lang }) {
         const language = lang && HighlightJS.getLanguage(lang) ? lang : "";
         const highlighted = language ? HighlightJS.highlight(text2, { language }).value : HighlightJS.highlightAuto(text2).value;
-        return `<pre><code class="hljs${language ? ` language-${language}` : ""}">${highlighted}</code></pre>`;
+        return `<pre><button class="nb-copy-btn">Copy</button><code class="hljs${language ? ` language-${language}` : ""}">${highlighted}</code></pre>`;
       }
     }
   });
-  purify.addHook("uponSanitizeAttribute", (node, data) => {
-    if (data.attrName === "class" && data.tagName === "code") {
-      node.setAttribute("class", data.attrValue || "");
-    }
-  });
   function renderMarkdown(raw) {
-    const html2 = g.parse(raw);
+    const html2 = g.parse(raw, { async: false });
     return purify.sanitize(html2, {
-      ADD_TAGS: ["pre", "code", "table", "thead", "tbody", "tr", "th", "td"],
       ADD_ATTR: ["class"]
     });
   }
   function initCopyButtons(container) {
+    if (container.dataset.nbCopyInit === "true") return;
+    container.dataset.nbCopyInit = "true";
     container.addEventListener("click", (e) => {
       const target = e.target;
       const btn = target.closest(".nb-copy-btn");
@@ -54457,14 +54506,28 @@ Please report this to https://github.com/markedjs/marked.`, e) {
       if (!pre) return;
       const code = pre.querySelector("code");
       if (!code) return;
-      void navigator.clipboard.writeText(code.textContent || "").then(() => {
-        btn.textContent = "Copied!";
-        setTimeout(() => {
-          btn.textContent = "Copy";
-        }, 1500);
-      });
+      const text2 = code.textContent || "";
+      if (navigator.clipboard?.writeText) {
+        void navigator.clipboard.writeText(text2).then(() => {
+          btn.textContent = "Copied!";
+          setTimeout(() => {
+            btn.textContent = "Copy";
+          }, 1500);
+        });
+      }
     });
   }
+  function esc(str) {
+    return str.replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;"
+    })[c]);
+  }
+  const MAX_MESSAGE_LENGTH = 32e3;
+  const QUICK_CHAT_SESSION_TITLE = "Quick Chat";
   (async function QuickChat() {
     if (window.__nb_qc) {
       window.__nb_qc.toggle();
@@ -54481,11 +54544,6 @@ Please report this to https://github.com/markedjs/marked.`, e) {
       streamAccumulator: "",
       streamRAF: 0
     };
-    function esc(s) {
-      const d = document.createElement("div");
-      d.textContent = s;
-      return d.innerHTML;
-    }
     const backdrop = document.createElement("div");
     backdrop.id = "nb-qc-backdrop";
     const container = document.createElement("div");
@@ -54513,10 +54571,11 @@ Please report this to https://github.com/markedjs/marked.`, e) {
     const sendBtn = container.querySelector("#nb-qc-send");
     function ensureSession() {
       const list = sessions.list();
-      if (list.length > 0) {
-        state.sessionId = list[0].id;
+      const existing = list.find((s) => s.title === QUICK_CHAT_SESSION_TITLE);
+      if (existing) {
+        state.sessionId = existing.id;
       } else {
-        state.sessionId = sessions.create("Quick Chat");
+        state.sessionId = sessions.create(QUICK_CHAT_SESSION_TITLE);
       }
     }
     function renderHistory() {
@@ -54536,13 +54595,21 @@ Please report this to https://github.com/markedjs/marked.`, e) {
       renderHistory();
       inputEl.focus();
       connect();
+      document.addEventListener("keydown", _keyHandlerCapturing, true);
     }
     function hide() {
       if (!state.visible) return;
       state.visible = false;
+      if (state.streamRAF) {
+        cancelAnimationFrame(state.streamRAF);
+        state.streamRAF = 0;
+      }
       backdrop.remove();
       container.remove();
       disconnect();
+      state.streamAccumulator = "";
+      sessions._flushPersist();
+      document.removeEventListener("keydown", _keyHandlerCapturing, true);
     }
     function toggle() {
       state.visible ? hide() : show();
@@ -54560,10 +54627,12 @@ Please report this to https://github.com/markedjs/marked.`, e) {
       state.ws = new NanobotWsClient(settings);
       setStatus("connecting", "Connecting...");
       state.ws.on("ready", (data) => {
+        if (!state.visible) return;
         const frame = data;
         setStatus("connected", frame.chat_id ? `chat ${frame.chat_id.slice(0, 8)}` : "Connected");
       });
       state.ws.on("message", (data) => {
+        if (!state.visible) return;
         const frame = data;
         const text2 = frame.text || "";
         sessions.addMessage(state.sessionId, "assistant", text2);
@@ -54573,6 +54642,7 @@ Please report this to https://github.com/markedjs/marked.`, e) {
         sendBtn.disabled = false;
       });
       state.ws.on("delta", (data) => {
+        if (!state.visible) return;
         const frame = data;
         const text2 = frame.text || "";
         if (!state.isStreaming) {
@@ -54595,6 +54665,7 @@ Please report this to https://github.com/markedjs/marked.`, e) {
         sessions.appendToLastAssistant(state.sessionId, text2);
       });
       state.ws.on("stream_end", () => {
+        if (!state.visible) return;
         sessions.markLastAssistantDone(state.sessionId);
         if (state.streamRAF) {
           cancelAnimationFrame(state.streamRAF);
@@ -54611,8 +54682,14 @@ Please report this to https://github.com/markedjs/marked.`, e) {
         state.isStreaming = false;
         sendBtn.disabled = false;
       });
-      state.ws.on("close", () => setStatus("disconnected", "Disconnected"));
-      state.ws.on("error", () => setStatus("error", "Connection failed"));
+      state.ws.on("close", () => {
+        if (!state.visible) return;
+        setStatus("disconnected", "Disconnected");
+      });
+      state.ws.on("error", () => {
+        if (!state.visible) return;
+        setStatus("error", "Connection failed");
+      });
       try {
         await state.ws.connect();
       } catch (e) {
@@ -54647,6 +54724,10 @@ Please report this to https://github.com/markedjs/marked.`, e) {
     async function send() {
       const text2 = inputEl.value.trim();
       if (!text2 || state.isStreaming) return;
+      if (text2.length > MAX_MESSAGE_LENGTH) {
+        setStatus("error", `Message too long (max ${MAX_MESSAGE_LENGTH} chars)`);
+        return;
+      }
       if (!state.ws?.connected) {
         setStatus("connecting", "Reconnecting...");
         try {
@@ -54655,10 +54736,14 @@ Please report this to https://github.com/markedjs/marked.`, e) {
           setStatus("error", "Connection failed");
           return;
         }
-        await new Promise((r) => setTimeout(r, 300));
       }
       if (!state.ws?.connected) {
         setStatus("error", "Not connected");
+        return;
+      }
+      sendBtn.disabled = true;
+      if (!state.ws) {
+        sendBtn.disabled = false;
         return;
       }
       sessions.addMessage(state.sessionId, "user", text2);
@@ -54684,14 +54769,16 @@ Please report this to https://github.com/markedjs/marked.`, e) {
     });
     sendBtn.addEventListener("click", send);
     backdrop.addEventListener("click", hide);
-    const _keyHandler = (e) => {
+    const _keyHandlerCapturing = (e) => {
       if (e.key === "Escape" && state.visible) {
+        const target = e.target;
+        if (!(target instanceof HTMLElement)) return;
+        if (target.closest("input, select, textarea, [contenteditable]")) return;
         e.preventDefault();
         e.stopPropagation();
         hide();
       }
     };
-    document.addEventListener("keydown", _keyHandler, true);
     show();
   })();
 })();

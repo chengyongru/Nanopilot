@@ -19,7 +19,7 @@ vi.stubGlobal('chrome', {
   },
 });
 
-import { DEFAULT_SETTINGS, loadSettings, saveSettings } from '../storage';
+import { DEFAULT_SETTINGS, loadSettings, saveSettings, validateSettings } from '../storage';
 
 describe('storage', () => {
   beforeEach(() => {
@@ -63,6 +63,52 @@ describe('storage', () => {
       const custom = { ...DEFAULT_SETTINGS, host: 'example.com' };
       await saveSettings(custom);
       expect(chrome.storage.local.set).toHaveBeenCalledWith({ nb_settings: custom });
+    });
+  });
+
+  describe('validateSettings', () => {
+    it('should return null for valid settings', () => {
+      expect(validateSettings(DEFAULT_SETTINGS)).toBeNull();
+    });
+
+    it('should return error for empty host', () => {
+      expect(validateSettings({ host: '' })).toBe('Host must not be empty');
+    });
+
+    it('should return error for whitespace-only host', () => {
+      expect(validateSettings({ host: '   ' })).toBe('Host must not be empty');
+    });
+
+    it('should return error for port out of range', () => {
+      expect(validateSettings({ port: 0 })).toContain('between 1 and 65535');
+      expect(validateSettings({ port: 99999 })).toContain('between 1 and 65535');
+      expect(validateSettings({ port: -1 })).toContain('between 1 and 65535');
+    });
+
+    it('should return error for non-numeric port string', () => {
+      expect(validateSettings({ port: 'abc' as unknown as number })).toContain('between 1 and 65535');
+    });
+
+    it('should return null for valid port values', () => {
+      expect(validateSettings({ port: 1 })).toBeNull();
+      expect(validateSettings({ port: 65535 })).toBeNull();
+      expect(validateSettings({ port: 8080 })).toBeNull();
+    });
+
+    it('should return error for path not starting with /', () => {
+      expect(validateSettings({ path: 'ws' })).toBe('WS Path must start with /');
+    });
+
+    it('should return null for empty path (uses default)', () => {
+      expect(validateSettings({ path: '' })).toBeNull();
+    });
+
+    it('should return error for tokenIssuePath not starting with /', () => {
+      expect(validateSettings({ tokenIssuePath: 'auth/token' })).toBe('Token Issue Path must start with /');
+    });
+
+    it('should return null for empty tokenIssuePath (uses default)', () => {
+      expect(validateSettings({ tokenIssuePath: '' })).toBeNull();
     });
   });
 });

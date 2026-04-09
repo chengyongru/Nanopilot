@@ -3,6 +3,8 @@ import type { Session, Message } from './types';
 export class SessionManager {
   private sessions: Record<string, Session> = {};
   private activeId: string | null = null;
+  private _persistTimer: ReturnType<typeof setTimeout> | null = null;
+  private _persistPending = false;
 
   async load(): Promise<void> {
     const data = await chrome.storage.local.get(['nb_sessions', 'nb_active_session']);
@@ -10,11 +12,37 @@ export class SessionManager {
     this.activeId = (data.nb_active_session as string) || null;
   }
 
-  private _persist(): void {
-    chrome.storage.local.set({
-      nb_sessions: this.sessions,
-      nb_active_session: this.activeId,
-    });
+  /** Debounced persist — only writes once per 500ms during rapid calls. */
+  _persist(): void {
+    if (this._persistPending) return;
+    this._persistPending = true;
+    this._persistTimer = setTimeout(() => {
+      this._persistPending = false;
+      this._persistTimer = null;
+      chrome.storage.local.set({
+        nb_sessions: this.sessions,
+        nb_active_session: this.activeId,
+      }).catch((err: unknown) => {
+        console.error('[session] persist failed:', err);
+      });
+    }, 500);
+  }
+
+  /** Flush any debounced persist immediately. */
+  async _flushPersist(): Promise<void> {
+    if (this._persistTimer) {
+      clearTimeout(this._persistTimer);
+      this._persistTimer = null;
+      this._persistPending = false;
+    }
+    try {
+      await chrome.storage.local.set({
+        nb_sessions: this.sessions,
+        nb_active_session: this.activeId,
+      });
+    } catch (err: unknown) {
+      console.error('[session] persist failed:', err);
+    }
   }
 
   create(title?: string): string {
@@ -59,6 +87,7 @@ export class SessionManager {
   }
 
   appendToLastAssistant(sessionId: string, text: string): void {
+    if (!text) return;
     const s = this.sessions[sessionId];
     if (!s) return;
     const last = s.messages[s.messages.length - 1];
@@ -77,15 +106,15 @@ export class SessionManager {
     const last = s.messages[s.messages.length - 1];
     if (last && last.role === 'assistant') {
       last.done = true;
-      this._persist();
+      this._flushPersist();
     }
   }
 
   delete(id: string): void {
     delete this.sessions[id];
     if (this.activeId === id) {
-      const keys = Object.keys(this.sessions);
-      this.activeId = keys.length ? keys[keys.length - 1] : null;
+      const remaining = Object.values(this.sessions).sort((a, b) => b.updatedAt - a.updatedAt);
+      this.activeId = remaining.length > 0 ? remaining[0].id : null;
     }
     this._persist();
   }

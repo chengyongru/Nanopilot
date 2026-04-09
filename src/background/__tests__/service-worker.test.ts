@@ -247,7 +247,7 @@ describe('service-worker', () => {
       expect(mockWs.addEventListener).toHaveBeenCalledWith('error', expect.any(Function));
     });
 
-    it('closes existing relay before opening new one', () => {
+    it('closes existing relay before opening new one for same tab', () => {
       const sendResponse = vi.fn();
       const oldWs = {
         addEventListener: vi.fn(),
@@ -275,7 +275,7 @@ describe('service-worker', () => {
 
       handler(
         { type: 'NB_WS_CONNECT', url: 'ws://localhost/b' },
-        { tab: { id: 2 } } as chrome.runtime.MessageSender,
+        { tab: { id: 1 } } as chrome.runtime.MessageSender,
         sendResponse,
       );
 
@@ -423,11 +423,11 @@ describe('service-worker', () => {
       // Simulate close - relayWs becomes null
       closeHandler({ code: 1000, reason: 'done' });
 
-      // Now NB_WS_CLOSE should be a no-op since relayWs is null
+      // Now NB_WS_CLOSE should be a no-op since relayWs is null (cleaned up by close event)
       const sendResponse2 = vi.fn();
       const result = handler(
         { type: 'NB_WS_CLOSE' },
-        {},
+        { tab: { id: 42 } } as chrome.runtime.MessageSender,
         sendResponse2,
       );
       expect(result).toBe(false);
@@ -483,7 +483,7 @@ describe('service-worker', () => {
 
       const result = handler(
         { type: 'NB_WS_SEND', text: 'hello from test' },
-        {},
+        { tab: { id: 1 } } as chrome.runtime.MessageSender,
         sendResponse,
       );
 
@@ -540,7 +540,7 @@ describe('service-worker', () => {
 
       const result = handler(
         { type: 'NB_WS_CLOSE' },
-        {},
+        { tab: { id: 1 } } as chrome.runtime.MessageSender,
         sendResponse,
       );
 
@@ -552,7 +552,7 @@ describe('service-worker', () => {
       const sendResponse = vi.fn();
       const result = handler(
         { type: 'NB_WS_CLOSE' },
-        {},
+        { tab: { id: 1 } } as chrome.runtime.MessageSender,
         sendResponse,
       );
 
@@ -565,7 +565,7 @@ describe('service-worker', () => {
       const sendResponse = vi.fn();
       const result = handler(
         { type: 'NB_WS_CLOSE' },
-        {},
+        { tab: { id: 99 } } as chrome.runtime.MessageSender,
         sendResponse,
       );
 

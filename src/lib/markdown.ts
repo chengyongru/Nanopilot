@@ -15,33 +15,29 @@ marked.use({
       const highlighted = language
         ? hljs.highlight(text, { language }).value
         : hljs.highlightAuto(text).value;
-      return `<pre><code class="hljs${language ? ` language-${language}` : ''}">${highlighted}</code></pre>`;
+      return `<pre><button class="nb-copy-btn">Copy</button><code class="hljs${language ? ` language-${language}` : ''}">${highlighted}</code></pre>`;
     },
   },
-});
-
-// Allow hljs classes through DOMPurify
-DOMPurify.addHook('uponSanitizeAttribute', (node, data) => {
-  if (data.attrName === 'class' && data.tagName === 'code') {
-    (node as Element).setAttribute('class', (data.attrValue as string) || '');
-  }
 });
 
 /**
  * Render a raw markdown string to sanitized HTML.
  */
 export function renderMarkdown(raw: string): string {
-  const html = marked.parse(raw) as string;
+  const html = marked.parse(raw, { async: false }) as string;
   return DOMPurify.sanitize(html, {
-    ADD_TAGS: ['pre', 'code', 'table', 'thead', 'tbody', 'tr', 'th', 'td'],
     ADD_ATTR: ['class'],
   });
 }
 
 /**
  * Add copy buttons to all code blocks inside `container` using event delegation.
+ * Uses a data attribute to prevent duplicate listener registration.
  */
 export function initCopyButtons(container: HTMLElement): void {
+  if (container.dataset.nbCopyInit === 'true') return;
+  container.dataset.nbCopyInit = 'true';
+
   container.addEventListener('click', (e: MouseEvent) => {
     const target = e.target as HTMLElement;
     const btn = target.closest('.nb-copy-btn') as HTMLElement | null;
@@ -53,9 +49,12 @@ export function initCopyButtons(container: HTMLElement): void {
     const code = pre.querySelector('code');
     if (!code) return;
 
-    void navigator.clipboard.writeText(code.textContent || '').then(() => {
-      btn.textContent = 'Copied!';
-      setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
-    });
+    const text = code.textContent || '';
+    if (navigator.clipboard?.writeText) {
+      void navigator.clipboard.writeText(text).then(() => {
+        btn.textContent = 'Copied!';
+        setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+      });
+    }
   });
 }

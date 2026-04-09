@@ -1,13 +1,22 @@
 import { SessionManager } from '../lib/session';
 import { NanobotWsClient } from '../lib/ws-client';
-import { loadSettings, saveSettings, DEFAULT_SETTINGS } from '../lib/storage';
+import { loadSettings, saveSettings, DEFAULT_SETTINGS, validateSettings } from '../lib/storage';
 import { renderMarkdown, initCopyButtons } from '../lib/markdown';
+import { esc } from '../lib/utils';
 import type { Settings } from '../lib/types';
+
+/** Maximum user message length in characters. */
+const MAX_MESSAGE_LENGTH = 32000;
 
 (async function () {
   const sessions = new SessionManager();
   let ws: NanobotWsClient | null = null;
   let isStreaming = false;
+  /** Session ID active at the time of connection — used to guard stale closures. */
+  let connectedSessionId: string | null = null;
+  // rAF-based streaming accumulator
+  let streamAccumulator = '';
+  let streamRAF = 0;
 
   const $ = (sel: string): Element | null => document.querySelector(sel);
   const $input = (sel: string): HTMLInputElement | HTMLTextAreaElement | null =>
@@ -25,6 +34,7 @@ import type { Settings } from '../lib/types';
   const settingsOverlay = $('#settings-overlay')!;
   const settingsForm = $('#settings-form') as HTMLFormElement;
   const btnCancel = $('#btn-settings-cancel') as HTMLButtonElement;
+  const settingsErrorEl = $('#settings-error') as HTMLElement | null;
 
   await sessions.load();
   renderSessionList();
@@ -91,6 +101,7 @@ import type { Settings } from '../lib/types';
   }
 
   async function deleteSession(id: string): Promise<void> {
+    if (!window.confirm('Delete this conversation? This cannot be undone.')) return;
     await disconnectWs();
     sessions.delete(id);
     renderSessionList();
@@ -111,10 +122,6 @@ import type { Settings } from '../lib/types';
     });
     scrollToBottom();
   }
-
-  // rAF-based streaming accumulator
-  let streamAccumulator = '';
-  let streamRAF = 0;
 
   function appendMessageDOM(role: 'user' | 'assistant', content: string, finalized: boolean): HTMLDivElement {
     const msgEl = document.createElement('div');
@@ -155,16 +162,21 @@ import type { Settings } from '../lib/types';
     const session = sessions.getActive();
     if (!session) return;
 
+    await disconnectWs();
+    connectedSessionId = session.id;
+
     const settings = await loadSettings();
     ws = new NanobotWsClient(settings);
     setConnStatus('connecting');
 
     ws.on('ready', (data: unknown) => {
+      if (connectedSessionId !== sessions.activeId) return;
       const d = data as { chat_id?: string };
       setConnStatus('connected', d.chat_id ? `chat ${d.chat_id.slice(0, 8)}` : '');
     });
 
     ws.on('message', (data: unknown) => {
+      if (connectedSessionId !== sessions.activeId) return;
       const d = data as { text?: string };
       const text = d.text || '';
       sessions.addMessage(session.id, 'assistant', text);
@@ -175,6 +187,7 @@ import type { Settings } from '../lib/types';
     });
 
     ws.on('delta', (data: unknown) => {
+      if (connectedSessionId !== sessions.activeId) return;
       const d = data as { text?: string };
       const text = d.text || '';
       if (!isStreaming) {
@@ -198,6 +211,7 @@ import type { Settings } from '../lib/types';
     });
 
     ws.on('stream_end', () => {
+      if (connectedSessionId !== sessions.activeId) return;
       sessions.markLastAssistantDone(session.id);
       if (streamRAF) {
         cancelAnimationFrame(streamRAF);
@@ -216,9 +230,9 @@ import type { Settings } from '../lib/types';
     });
 
     ws.on('close', () => {
-      setConnStatus('disconnected');
       isStreaming = false;
       updateSendBtn();
+      setConnStatus('disconnected');
     });
 
     ws.on('error', () => {
@@ -239,11 +253,22 @@ import type { Settings } from '../lib/types';
       ws = null;
     }
     isStreaming = false;
+    connectedSessionId = null;
+    if (streamRAF) {
+      cancelAnimationFrame(streamRAF);
+      streamRAF = 0;
+    }
+    streamAccumulator = '';
   }
 
   async function sendMessage(): Promise<void> {
     const text = msgInput.value.trim();
     if (!text || isStreaming) return;
+
+    if (text.length > MAX_MESSAGE_LENGTH) {
+      setConnStatus('error', `Message too long (max ${MAX_MESSAGE_LENGTH} chars)`);
+      return;
+    }
 
     if (!ws?.connected) {
       setConnStatus('connecting');
@@ -251,18 +276,25 @@ import type { Settings } from '../lib/types';
         await connectWs();
       } catch {
         setConnStatus('error', 'Connection failed');
+        updateSendBtn();
         return;
       }
-      await new Promise<void>((r) => setTimeout(r, 300));
     }
 
     if (!ws?.connected) {
       setConnStatus('error', 'Not connected');
+      updateSendBtn();
       return;
     }
 
     const session = sessions.getActive();
     if (!session) return;
+
+    // Guard against session switch during reconnect
+    if (connectedSessionId !== session.id) return;
+
+    // Disable send button to prevent duplicate sends
+    btnSend.disabled = true;
 
     sessions.addMessage(session.id, 'user', text);
     appendMessageDOM('user', text, true);
@@ -274,6 +306,20 @@ import type { Settings } from '../lib/types';
 
   function updateSendBtn(): void {
     btnSend.disabled = isStreaming;
+  }
+
+  function showSettingsError(msg: string): void {
+    if (settingsErrorEl) {
+      settingsErrorEl.textContent = msg;
+      settingsErrorEl.classList.remove('hidden');
+    }
+  }
+
+  function clearSettingsError(): void {
+    if (settingsErrorEl) {
+      settingsErrorEl.textContent = '';
+      settingsErrorEl.classList.add('hidden');
+    }
   }
 
   async function openSettings(): Promise<void> {
@@ -292,10 +338,12 @@ import type { Settings } from '../lib/types';
     if (secretEl) secretEl.value = s.tokenIssueSecret;
     if (clientIdEl) clientIdEl.value = s.clientId;
 
+    clearSettingsError();
     settingsOverlay.classList.remove('hidden');
   }
 
   function closeSettings(): void {
+    clearSettingsError();
     settingsOverlay.classList.add('hidden');
   }
 
@@ -307,15 +355,25 @@ import type { Settings } from '../lib/types';
     const secretEl = $input('#s-secret');
     const clientIdEl = $input('#s-client-id');
 
-    const s: Settings = {
-      host: (hostEl?.value.trim()) || DEFAULT_SETTINGS.host,
-      port: parseInt(portEl?.value ?? '', 10) || DEFAULT_SETTINGS.port,
-      path: (pathEl?.value.trim()) || DEFAULT_SETTINGS.path,
-      tokenIssuePath: (issuePathEl?.value.trim()) || DEFAULT_SETTINGS.tokenIssuePath,
+    const portRaw = portEl?.value ?? '';
+    const port = parseInt(portRaw, 10);
+
+    const candidate = {
+      host: hostEl?.value.trim() || DEFAULT_SETTINGS.host,
+      port: isNaN(port) ? DEFAULT_SETTINGS.port : port,
+      path: pathEl?.value.trim() || DEFAULT_SETTINGS.path,
+      tokenIssuePath: issuePathEl?.value.trim() || DEFAULT_SETTINGS.tokenIssuePath,
       tokenIssueSecret: secretEl?.value ?? '',
-      clientId: (clientIdEl?.value.trim()) || DEFAULT_SETTINGS.clientId,
+      clientId: clientIdEl?.value.trim() || DEFAULT_SETTINGS.clientId,
     };
-    await saveSettings(s);
+
+    const validationError = validateSettings(candidate);
+    if (validationError) {
+      showSettingsError(validationError);
+      return;
+    }
+
+    await saveSettings(candidate);
     closeSettings();
     if (sessions.activeId) {
       await connectWs();
@@ -359,9 +417,8 @@ import type { Settings } from '../lib/types';
     toggleBtn.title = showing ? 'Show password' : 'Hide password';
   });
 
-  function esc(str: string): string {
-    const d = document.createElement('div');
-    d.textContent = str;
-    return d.innerHTML;
-  }
+  // Flush debounced session data on page unload to prevent data loss
+  window.addEventListener('pagehide', () => {
+    sessions._flushPersist();
+  });
 })();

@@ -33,27 +33,38 @@ if (existsSync(distDir)) {
 }
 
 // Build each entry as a self-contained IIFE bundle
+let firstBuild = true;
 for (const entry of entries) {
   console.log(`Building ${entry.name}...`);
-  await build({
-    root,
-    build: {
-      rollupOptions: {
-        input: entry.input,
-        output: {
-          entryFileNames: `${entry.name.split('/').pop()}.js`,
-          format: 'iife',
+  try {
+    const result = await build({
+      root,
+      build: {
+        rollupOptions: {
+          input: entry.input,
+          output: {
+            entryFileNames: `${entry.name.split('/').pop()}.js`,
+            format: 'iife',
+          },
         },
+        outDir: resolve(distDir, dirname(entry.name)),
+        emptyOutDir: firstBuild,
+        minify: false,
+        sourcemap: false,
+        target: 'chrome120',
+        copyPublicDir: false,
       },
-      outDir: resolve(distDir, dirname(entry.name)),
-      emptyOutDir: false,
-      minify: false,
-      sourcemap: false,
-      target: 'chrome120',
-      copyPublicDir: false,
-    },
-    logLevel: 'warn',
-  });
+      logLevel: 'warn',
+    });
+    if (!result) {
+      console.error(`Build failed for ${entry.name}: no output`);
+      process.exit(1);
+    }
+    firstBuild = false;
+  } catch (err) {
+    console.error(`Build failed for ${entry.name}:`, err);
+    process.exit(1);
+  }
 }
 
 // Copy static assets

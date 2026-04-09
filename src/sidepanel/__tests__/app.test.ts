@@ -101,6 +101,7 @@ function buildDOM(): string {
             </div>
           </label>
           <label><span class="label-text">Client ID</span><input type="text" id="s-client-id"></label>
+          <div id="settings-error" class="hidden"></div>
           <div class="form-actions">
             <button type="button" id="btn-settings-cancel" class="btn-secondary">Cancel</button>
             <button type="submit" class="btn-primary">Save</button>
@@ -149,6 +150,7 @@ describe('sidepanel app', () => {
     vi.stubGlobal('location', { href: 'chrome-extension://abc/sidepanel/index.html' });
 
     document.body.innerHTML = buildDOM();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
     vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
       cb();
       return 0;
@@ -290,7 +292,8 @@ describe('sidepanel app', () => {
     const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
     btnNew.click();
     await vi.waitFor(() => {
-      expect(document.querySelectorAll('.session-item').length).toBe(1);
+      const connStatus = document.querySelector('#conn-status');
+      expect(connStatus?.className).toBe('connected');
     });
     btnNew.click();
     await vi.waitFor(() => {
@@ -298,13 +301,13 @@ describe('sidepanel app', () => {
     });
 
     const items = document.querySelectorAll('.session-item');
-    const activeItem = items[0];
-    const deleteBtn = activeItem.querySelector('.session-delete') as HTMLElement;
+    // Delete the active (first) session — should switch to the other
+    const deleteBtn = items[0].querySelector('.session-delete') as HTMLElement;
     deleteBtn.click();
 
     await vi.waitFor(() => {
       expect(document.querySelectorAll('.session-item').length).toBe(1);
-    });
+    }, { timeout: 3000 });
   });
 
   // =========================================================================
@@ -827,11 +830,12 @@ describe('sidepanel app', () => {
       const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
       btnNew.click();
       await vi.waitFor(() => {
-        expect(document.querySelectorAll('.session-item').length).toBe(1);
+        const connStatus = document.querySelector('#conn-status');
+        expect(connStatus?.className).toBe('connected');
       });
 
-      // Get the FakeWsClient instance
-      const ws = FakeWsClient._instances[0];
+      // Get the latest FakeWsClient instance (connectWs creates a new one)
+      const ws = FakeWsClient._instances[FakeWsClient._instances.length - 1];
       expect(ws).toBeTruthy();
 
       ws.emit('message', { text: 'Hello from bot' });
@@ -847,10 +851,11 @@ describe('sidepanel app', () => {
       const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
       btnNew.click();
       await vi.waitFor(() => {
-        expect(document.querySelectorAll('.session-item').length).toBe(1);
+        const connStatus = document.querySelector('#conn-status');
+        expect(connStatus?.className).toBe('connected');
       });
 
-      const ws = FakeWsClient._instances[0];
+      const ws = FakeWsClient._instances[FakeWsClient._instances.length - 1];
       ws.emit('delta', { text: 'Hel' });
       await vi.waitFor(() => {
         const msgs = document.querySelectorAll('.msg.assistant.streaming');
@@ -867,10 +872,11 @@ describe('sidepanel app', () => {
       const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
       btnNew.click();
       await vi.waitFor(() => {
-        expect(document.querySelectorAll('.session-item').length).toBe(1);
+        const connStatus = document.querySelector('#conn-status');
+        expect(connStatus?.className).toBe('connected');
       });
 
-      const ws = FakeWsClient._instances[0];
+      const ws = FakeWsClient._instances[FakeWsClient._instances.length - 1];
       ws.emit('delta', { text: 'Hel' });
       await vi.waitFor(() => {
         expect(document.querySelectorAll('.msg.assistant.streaming').length).toBe(1);
@@ -888,10 +894,11 @@ describe('sidepanel app', () => {
       const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
       btnNew.click();
       await vi.waitFor(() => {
-        expect(document.querySelectorAll('.session-item').length).toBe(1);
+        const connStatus = document.querySelector('#conn-status');
+        expect(connStatus?.className).toBe('connected');
       });
 
-      const ws = FakeWsClient._instances[0];
+      const ws = FakeWsClient._instances[FakeWsClient._instances.length - 1];
       ws.emit('delta', { text: 'streaming' });
       await vi.waitFor(() => {
         expect(document.querySelectorAll('.msg.assistant.streaming').length).toBe(1);
@@ -914,7 +921,7 @@ describe('sidepanel app', () => {
         expect(connStatus?.className).toBe('connected');
       });
 
-      const ws = FakeWsClient._instances[0];
+      const ws = FakeWsClient._instances[FakeWsClient._instances.length - 1];
       ws.emit('close');
       await vi.waitFor(() => {
         const connStatus = document.querySelector('#conn-status');
@@ -933,7 +940,7 @@ describe('sidepanel app', () => {
         expect(connStatus?.className).toBe('connected');
       });
 
-      const ws = FakeWsClient._instances[0];
+      const ws = FakeWsClient._instances[FakeWsClient._instances.length - 1];
       ws.emit('error');
       await vi.waitFor(() => {
         const connStatus = document.querySelector('#conn-status');
@@ -946,12 +953,11 @@ describe('sidepanel app', () => {
       const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
       btnNew.click();
       await vi.waitFor(() => {
-        expect(document.querySelectorAll('.session-item').length).toBe(1);
+        const connStatus = document.querySelector('#conn-status');
+        expect(connStatus?.className).toBe('connected');
       });
 
-      // The ready event was already emitted during connect()
-      // Check the status shows chat detail when chat_id is provided
-      const ws = FakeWsClient._instances[0];
+      const ws = FakeWsClient._instances[FakeWsClient._instances.length - 1];
       ws.emit('ready', { chat_id: 'abc12345' });
       await vi.waitFor(() => {
         const connStatus = document.querySelector('#conn-status');
@@ -968,11 +974,12 @@ describe('sidepanel app', () => {
     const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
     btnNew.click();
     await vi.waitFor(() => {
-      expect(document.querySelectorAll('.session-item').length).toBe(1);
+      const connStatus = document.querySelector('#conn-status');
+      expect(connStatus?.className).toBe('connected');
     });
 
     // Disconnect the ws
-    const ws = FakeWsClient._instances[0];
+    const ws = FakeWsClient._instances[FakeWsClient._instances.length - 1];
     ws.connected = false;
     ws.emit('close');
 

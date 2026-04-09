@@ -17,6 +17,7 @@ export class NanobotWsClient {
   private _relayed = false;
   private _relayConnected = false;
   private _relayListener: ChromeMessageListener | null = null;
+  private _relayAbort = false;
 
   constructor(settings: Settings) {
     this.settings = settings;
@@ -100,6 +101,7 @@ export class NanobotWsClient {
 
   private _connectDirect(url: string): Promise<void> {
     this._relayed = false;
+    let errored = false;
     return new Promise<void>((resolve, reject) => {
       this.ws = new WebSocket(url);
       const onOpen = () => {
@@ -110,22 +112,28 @@ export class NanobotWsClient {
       const onError = () => {
         this.ws!.removeEventListener('open', onOpen);
         this.ws!.removeEventListener('error', onError);
+        errored = true;
         reject(new Error('WebSocket connection failed'));
       };
       this.ws.addEventListener('open', onOpen);
       this.ws.addEventListener('error', onError);
       this.ws.addEventListener('message', (e) => this._handleFrame(e.data as string));
       this.ws.addEventListener('close', (e) => {
-        this._emit('close', { code: e.code, reason: e.reason });
+        if (!errored) {
+          this._emit('close', { code: e.code, reason: e.reason });
+        }
         this.ws = null;
       });
-      this.ws.addEventListener('error', () => this._emit('error', {}));
+      this.ws.addEventListener('error', () => {
+        this._emit('error', {});
+      });
     });
   }
 
   private async _connectRelay(url: string): Promise<void> {
     this._relayed = true;
     this._relayConnected = false;
+    this._relayAbort = false;
 
     this._relayListener = (msg) => {
       if (msg.type === 'NB_WS_MESSAGE') this._handleFrame(msg.data as string);
@@ -142,22 +150,43 @@ export class NanobotWsClient {
 
     const result = await chrome.runtime.sendMessage({ type: 'NB_WS_CONNECT', url });
     if (!result?.ok) {
+      this._removeRelayListener();
       throw new Error('WebSocket relay failed');
     }
 
-    await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(
-        () => reject(new Error('WebSocket relay timeout')),
-        10000,
-      );
-      const check = () => {
-        if (this._relayConnected) {
-          clearTimeout(timeout);
-          resolve();
-        } else setTimeout(check, 50);
-      };
-      check();
-    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(
+          () => {
+            this._relayAbort = true;
+            this._removeRelayListener();
+            reject(new Error('WebSocket relay timeout'));
+          },
+          10000,
+        );
+        const check = () => {
+          if (this._relayAbort) return;
+          if (this._relayConnected) {
+            clearTimeout(timeout);
+            resolve();
+          } else {
+            setTimeout(check, 50);
+          }
+        };
+        check();
+      });
+    } catch {
+      // On timeout or abort, clean up the relay connection
+      this._removeRelayListener();
+      throw new Error('WebSocket relay timeout');
+    }
+  }
+
+  private _removeRelayListener(): void {
+    if (this._relayListener) {
+      chrome.runtime.onMessage.removeListener(this._relayListener);
+      this._relayListener = null;
+    }
   }
 
   private _handleFrame(raw: string): void {
@@ -196,13 +225,11 @@ export class NanobotWsClient {
   }
 
   disconnect(): void {
+    this._relayAbort = true;
     if (this._relayed) {
       chrome.runtime.sendMessage({ type: 'NB_WS_CLOSE' });
       this._relayConnected = false;
-      if (this._relayListener) {
-        chrome.runtime.onMessage.removeListener(this._relayListener);
-        this._relayListener = null;
-      }
+      this._removeRelayListener();
       this._relayed = false;
     } else if (this.ws) {
       this.ws.close();

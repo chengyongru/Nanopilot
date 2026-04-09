@@ -38,7 +38,7 @@ describe('renderMarkdown', () => {
 
   it('should render code blocks with hljs class and highlighting', () => {
     const result = renderMarkdown('```js\nconst x = 1;\n```');
-    expect(result).toContain('<pre><code');
+    expect(result).toContain('<pre>');
     expect(result).toContain('hljs');
     // highlight.js wraps keywords and numbers in spans
     expect(result).toMatch(/hljs-keyword/);

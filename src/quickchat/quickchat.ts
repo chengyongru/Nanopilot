@@ -2,6 +2,10 @@ import { SessionManager } from '../lib/session';
 import { loadSettings } from '../lib/storage';
 import { NanobotWsClient } from '../lib/ws-client';
 import { renderMarkdown, initCopyButtons } from '../lib/markdown';
+import { esc } from '../lib/utils';
+
+/** Maximum user message length in characters. */
+const MAX_MESSAGE_LENGTH = 32000;
 
 interface QuickChatState {
   visible: boolean;
@@ -22,6 +26,9 @@ declare global {
   }
 }
 
+/** Unique session title to avoid mixing quick chat with side panel sessions. */
+const QUICK_CHAT_SESSION_TITLE = 'Quick Chat';
+
 (async function QuickChat(): Promise<void> {
   if (window.__nb_qc) {
     (window.__nb_qc as QuickChatApi).toggle();
@@ -40,12 +47,6 @@ declare global {
     streamAccumulator: '',
     streamRAF: 0,
   };
-
-  function esc(s: string): string {
-    const d = document.createElement('div');
-    d.textContent = s;
-    return d.innerHTML;
-  }
 
   const backdrop = document.createElement('div');
   backdrop.id = 'nb-qc-backdrop';
@@ -76,11 +77,13 @@ declare global {
   const sendBtn = container.querySelector('#nb-qc-send') as HTMLButtonElement;
 
   function ensureSession(): void {
+    // Use a dedicated "Quick Chat" session instead of reusing the most recent side panel session
     const list = sessions.list();
-    if (list.length > 0) {
-      state.sessionId = list[0].id;
+    const existing = list.find((s) => s.title === QUICK_CHAT_SESSION_TITLE);
+    if (existing) {
+      state.sessionId = existing.id;
     } else {
-      state.sessionId = sessions.create('Quick Chat');
+      state.sessionId = sessions.create(QUICK_CHAT_SESSION_TITLE);
     }
   }
 
@@ -102,14 +105,25 @@ declare global {
     renderHistory();
     inputEl.focus();
     connect();
+    // Add document-level Escape listener when overlay is shown
+    document.addEventListener('keydown', _keyHandlerCapturing, true);
   }
 
   function hide(): void {
     if (!state.visible) return;
     state.visible = false;
+    if (state.streamRAF) {
+      cancelAnimationFrame(state.streamRAF);
+      state.streamRAF = 0;
+    }
     backdrop.remove();
     container.remove();
     disconnect();
+    state.streamAccumulator = '';
+    // Flush debounced session writes to prevent data loss
+    sessions._flushPersist();
+    // Remove document-level Escape listener when overlay is hidden
+    document.removeEventListener('keydown', _keyHandlerCapturing, true);
   }
 
   function toggle(): void {
@@ -133,11 +147,13 @@ declare global {
     setStatus('connecting', 'Connecting...');
 
     state.ws.on('ready', (data: unknown) => {
+      if (!state.visible) return;
       const frame = data as { chat_id?: string };
       setStatus('connected', frame.chat_id ? `chat ${frame.chat_id.slice(0, 8)}` : 'Connected');
     });
 
     state.ws.on('message', (data: unknown) => {
+      if (!state.visible) return;
       const frame = data as { text?: string };
       const text = frame.text || '';
       sessions.addMessage(state.sessionId!, 'assistant', text);
@@ -148,6 +164,7 @@ declare global {
     });
 
     state.ws.on('delta', (data: unknown) => {
+      if (!state.visible) return;
       const frame = data as { text?: string };
       const text = frame.text || '';
       if (!state.isStreaming) {
@@ -171,6 +188,7 @@ declare global {
     });
 
     state.ws.on('stream_end', () => {
+      if (!state.visible) return;
       sessions.markLastAssistantDone(state.sessionId!);
       if (state.streamRAF) {
         cancelAnimationFrame(state.streamRAF);
@@ -188,8 +206,14 @@ declare global {
       sendBtn.disabled = false;
     });
 
-    state.ws.on('close', () => setStatus('disconnected', 'Disconnected'));
-    state.ws.on('error', () => setStatus('error', 'Connection failed'));
+    state.ws.on('close', () => {
+      if (!state.visible) return;
+      setStatus('disconnected', 'Disconnected');
+    });
+    state.ws.on('error', () => {
+      if (!state.visible) return;
+      setStatus('error', 'Connection failed');
+    });
 
     try {
       await state.ws.connect();
@@ -231,6 +255,11 @@ declare global {
     const text = inputEl.value.trim();
     if (!text || state.isStreaming) return;
 
+    if (text.length > MAX_MESSAGE_LENGTH) {
+      setStatus('error', `Message too long (max ${MAX_MESSAGE_LENGTH} chars)`);
+      return;
+    }
+
     if (!state.ws?.connected) {
       setStatus('connecting', 'Reconnecting...');
       try {
@@ -239,11 +268,19 @@ declare global {
         setStatus('error', 'Connection failed');
         return;
       }
-      await new Promise<void>((r) => setTimeout(r, 300));
     }
 
     if (!state.ws?.connected) {
       setStatus('error', 'Not connected');
+      return;
+    }
+
+    // Disable send button to prevent duplicate sends
+    sendBtn.disabled = true;
+
+    // Guard against disconnect during async reconnect (e.g. user pressed Escape)
+    if (!state.ws) {
+      sendBtn.disabled = false;
       return;
     }
 
@@ -274,14 +311,21 @@ declare global {
   sendBtn.addEventListener('click', send);
   backdrop.addEventListener('click', hide);
 
-  const _keyHandler = (e: KeyboardEvent): void => {
+  // Intercept Escape at document level to close overlay from anywhere except host-page inputs.
+  // The textarea's own keydown handler calls stopPropagation(), so it handles its own Escape
+  // before this document-level handler fires.
+  const _keyHandlerCapturing = (e: KeyboardEvent): void => {
     if (e.key === 'Escape' && state.visible) {
+      const target = e.target;
+      if (!(target instanceof HTMLElement)) return;
+      // Don't intercept Escape if user is typing in a host page input/select/textarea
+      if (target.closest('input, select, textarea, [contenteditable]')) return;
       e.preventDefault();
       e.stopPropagation();
       hide();
     }
   };
-  document.addEventListener('keydown', _keyHandler, true);
+  // Listener is added/removed in show()/hide() — not added here at module level
 
   show();
 })();

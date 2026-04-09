@@ -47,17 +47,18 @@ chrome.commands.onCommand.addListener(async (command: string) => {
 });
 
 // ---------------------------------------------------------------------------
-// Message relay
+// Message relay — supports multiple concurrent WebSocket connections
 // ---------------------------------------------------------------------------
 
-/** Active WebSocket relay connection (one at a time). */
-let relayWs: WebSocket | null = null;
-let relayTabId: number | null = null;
+/** Active WebSocket relay connections, keyed by tab ID. */
+const relayConnections = new Map<number, WebSocket>();
 
-function _relayToTab(type: string, data?: Record<string, unknown>): void {
-  if (relayTabId !== null) {
-    chrome.tabs.sendMessage(relayTabId, { type, ...data }).catch(() => {});
-  }
+function _relayToTab(tabId: number, type: string, data?: Record<string, unknown>): void {
+  chrome.tabs.sendMessage(tabId, { type, ...data }).catch(() => {});
+}
+
+function _cleanupRelay(tabId: number): void {
+  relayConnections.delete(tabId);
 }
 
 chrome.runtime.onMessage.addListener(
@@ -66,6 +67,8 @@ chrome.runtime.onMessage.addListener(
     sender: chrome.runtime.MessageSender,
     sendResponse: (response?: unknown) => void,
   ): boolean | undefined => {
+    const senderTabId = sender.tab?.id;
+
     /* --- HTTP fetch relay (for token issuance) --- */
     if (msg.type === 'NB_FETCH') {
       fetch(msg.url!, { headers: msg.headers || {} })
@@ -86,32 +89,36 @@ chrome.runtime.onMessage.addListener(
 
     /* --- WebSocket relay --- */
     if (msg.type === 'NB_WS_CONNECT') {
-      // Close any existing relay connection
-      if (relayWs) relayWs.close();
+      if (senderTabId == null) {
+        sendResponse({ ok: false, error: 'No sender tab' });
+        return false;
+      }
 
-      relayTabId = sender.tab?.id ?? null;
+      // Close any existing relay connection for this tab
+      const existing = relayConnections.get(senderTabId);
+      if (existing) existing.close();
 
       try {
-        relayWs = new WebSocket(msg.url!);
+        const ws = new WebSocket(msg.url!);
 
-        relayWs.addEventListener('open', () => {
-          _relayToTab('NB_WS_OPEN');
+        ws.addEventListener('open', () => {
+          _relayToTab(senderTabId, 'NB_WS_OPEN');
         });
 
-        relayWs.addEventListener('message', (e: MessageEvent) => {
-          _relayToTab('NB_WS_MESSAGE', { data: e.data });
+        ws.addEventListener('message', (e: MessageEvent) => {
+          _relayToTab(senderTabId, 'NB_WS_MESSAGE', { data: e.data });
         });
 
-        relayWs.addEventListener('close', (e: CloseEvent) => {
-          _relayToTab('NB_WS_CLOSE', { code: e.code, reason: e.reason });
-          relayWs = null;
-          relayTabId = null;
+        ws.addEventListener('close', (e: CloseEvent) => {
+          _relayToTab(senderTabId, 'NB_WS_CLOSE', { code: e.code, reason: e.reason });
+          _cleanupRelay(senderTabId);
         });
 
-        relayWs.addEventListener('error', () => {
-          _relayToTab('NB_WS_ERROR');
+        ws.addEventListener('error', () => {
+          _relayToTab(senderTabId, 'NB_WS_ERROR');
         });
 
+        relayConnections.set(senderTabId, ws);
         sendResponse({ ok: true });
       } catch (err: unknown) {
         sendResponse({ ok: false, error: (err as Error).message });
@@ -120,16 +127,19 @@ chrome.runtime.onMessage.addListener(
     }
 
     if (msg.type === 'NB_WS_SEND') {
-      if (relayWs && relayWs.readyState === WebSocket.OPEN) {
-        relayWs.send(msg.text!);
+      if (senderTabId == null) return false;
+      const ws = relayConnections.get(senderTabId);
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(msg.text!);
       }
       return false;
     }
 
     if (msg.type === 'NB_WS_CLOSE') {
-      if (relayWs) relayWs.close();
-      relayWs = null;
-      relayTabId = null;
+      if (senderTabId == null) return false;
+      const ws = relayConnections.get(senderTabId);
+      if (ws) ws.close();
+      _cleanupRelay(senderTabId);
       return false;
     }
 

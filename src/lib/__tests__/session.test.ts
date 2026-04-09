@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock chrome.storage.local with an in-memory store
 const storage: Record<string, unknown> = {};
@@ -39,6 +39,11 @@ describe('SessionManager', () => {
     Object.keys(storage).forEach((k) => delete storage[k]);
     uuidCounter = 0;
     vi.clearAllMocks();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   describe('load()', () => {
@@ -109,8 +114,11 @@ describe('SessionManager', () => {
       expect(sm.getActive()?.id).toBe(id);
     });
 
-    it('should persist sessions and activeId to storage', () => {
+    it('should persist sessions and activeId to storage', async () => {
       sm.create('Test');
+
+      // Advance timers to flush debounced persist
+      await vi.advanceTimersByTimeAsync(600);
 
       expect(chrome.storage.local.set).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -166,12 +174,13 @@ describe('SessionManager', () => {
       expect(sm.getActive()?.id).toBe(id);
     });
 
-    it('should persist when setting active', () => {
+    it('should persist when setting active', async () => {
       const id1 = sm.create('First');
       const id2 = sm.create('Second');
       vi.clearAllMocks();
 
       sm.setActive(id1);
+      await vi.advanceTimersByTimeAsync(600);
 
       expect(chrome.storage.local.set).toHaveBeenCalledTimes(1);
     });
@@ -227,11 +236,12 @@ describe('SessionManager', () => {
       expect(chrome.storage.local.set).not.toHaveBeenCalled();
     });
 
-    it('should persist after adding a message', () => {
+    it('should persist after adding a message', async () => {
       const id = sm.create('Test');
       vi.clearAllMocks();
 
       sm.addMessage(id, 'assistant', 'Hi there');
+      await vi.advanceTimersByTimeAsync(600);
 
       expect(chrome.storage.local.set).toHaveBeenCalledTimes(1);
     });
@@ -306,17 +316,19 @@ describe('SessionManager', () => {
   });
 
   describe('markLastAssistantDone()', () => {
-    it('should mark the last assistant message as done', () => {
+    it('should mark the last assistant message as done', async () => {
       const id = sm.create('Test');
       sm.appendToLastAssistant(id, 'Streaming');
 
       sm.markLastAssistantDone(id);
+      // _flushPersist is async and calls set immediately
+      await vi.runAllTimersAsync();
 
       const session = sm.get(id)!;
       expect(session.messages[0].done).toBe(true);
     });
 
-    it('should do nothing when last message is from user', () => {
+    it('should do nothing when last message is from user', async () => {
       const id = sm.create('Test');
       sm.addMessage(id, 'user', 'Hello');
       vi.clearAllMocks();
@@ -327,7 +339,7 @@ describe('SessionManager', () => {
       expect(chrome.storage.local.set).not.toHaveBeenCalled();
     });
 
-    it('should do nothing when session has no messages', () => {
+    it('should do nothing when session has no messages', async () => {
       const id = sm.create('Test');
       vi.clearAllMocks();
 
@@ -361,6 +373,23 @@ describe('SessionManager', () => {
       expect(sm.getActive()?.id).toBe(id1);
     });
 
+    it('should select the most recently updated session after deleting the active one', () => {
+      const id1 = sm.create('First');
+      const id2 = sm.create('Second');
+      const id3 = sm.create('Third');
+
+      // Make id1 the most recently updated
+      sm.get(id1)!.updatedAt = 9999;
+      sm.get(id2)!.updatedAt = 100;
+      sm.get(id3)!.updatedAt = 200;
+
+      // Delete the active session (id3 since it was created last)
+      sm.delete(id3);
+
+      // Should select id1 (most recently updated remaining)
+      expect(sm.getActive()?.id).toBe(id1);
+    });
+
     it('should set activeId to null when deleting the last session', () => {
       const id = sm.create('Only');
 
@@ -370,11 +399,12 @@ describe('SessionManager', () => {
       expect(sm.list()).toEqual([]);
     });
 
-    it('should persist after deletion', () => {
+    it('should persist after deletion', async () => {
       const id = sm.create('Test');
       vi.clearAllMocks();
 
       sm.delete(id);
+      await vi.advanceTimersByTimeAsync(600);
 
       expect(chrome.storage.local.set).toHaveBeenCalledTimes(1);
     });
@@ -406,12 +436,34 @@ describe('SessionManager', () => {
       expect(chrome.storage.local.set).not.toHaveBeenCalled();
     });
 
-    it('should persist after renaming', () => {
+    it('should persist after renaming', async () => {
       const id = sm.create('Test');
       vi.clearAllMocks();
 
       sm.rename(id, 'Renamed');
+      await vi.advanceTimersByTimeAsync(600);
 
+      expect(chrome.storage.local.set).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('debounced _persist()', () => {
+    it('should batch multiple rapid calls into a single write', async () => {
+      const id = sm.create('Test');
+
+      // Before debounce fires — only the create() persist may or may not have fired
+      // depending on timer state. Clear and check fresh.
+      vi.clearAllMocks();
+
+      sm.addMessage(id, 'user', 'a');
+      sm.addMessage(id, 'user', 'b');
+      sm.addMessage(id, 'user', 'c');
+
+      // Before debounce fires — none of the addMessage persists should have fired
+      expect(chrome.storage.local.set).toHaveBeenCalledTimes(0);
+
+      // After debounce fires — all 3 addMessage calls batched into 1 write
+      await vi.advanceTimersByTimeAsync(600);
       expect(chrome.storage.local.set).toHaveBeenCalledTimes(1);
     });
   });

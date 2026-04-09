@@ -154,9 +154,6 @@ describe('service-worker', () => {
       expect(chrome.scripting.executeScript).toHaveBeenCalledWith({
         target: { tabId: 1 },
         files: [
-          'lib/storage.js',
-          'lib/session.js',
-          'lib/ws-client.js',
           'quickchat/quickchat.js',
         ],
       });

@@ -37,9 +37,6 @@ chrome.commands.onCommand.addListener(async (command: string) => {
     await chrome.scripting.executeScript({
       target: { tabId: tab.id! },
       files: [
-        'lib/storage.js',
-        'lib/session.js',
-        'lib/ws-client.js',
         'quickchat/quickchat.js',
       ],
     });

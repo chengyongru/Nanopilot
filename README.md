@@ -1,7 +1,7 @@
 # Nanopilot
 
 <p align="center">
-  <img src="icons/icon128.png" width="56" alt="Nanobot">
+  <img src="icons/logo-cat.png" width="56" alt="Nanobot">
 </p>
 
 <p align="center">
@@ -9,8 +9,6 @@
 </p>
 
 Open a side panel for persistent multi-session conversations, or hit <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>K</kbd> for a quick question on any page.
-
-**TypeScript + Vite. Tested with Vitest.**
 
 ---
 
@@ -47,6 +45,18 @@ Pin it to your toolbar via the puzzle icon.
 2. Click the extension icon → open Settings (gear icon)
 3. Fill in your host, port, and token issue secret → Save
 4. Start chatting
+
+## Architecture
+
+<p align="center">
+  <img src="docs/architecture.png" alt="Nanopilot Ecosystem Architecture" width="680">
+</p>
+
+## Screenshots
+
+| Side Panel | Quick Chat |
+|:---:|:---:|
+| <img src="docs/sidepanel.png" alt="Side Panel" width="400"> | <img src="docs/quickchat.png" alt="Quick Chat" width="400"> |
 
 ## What's Inside
 

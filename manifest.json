@@ -27,8 +27,8 @@
   "commands": {
     "quick-chat": {
       "suggested_key": {
-        "default": "Ctrl+K",
-        "mac": "Command+K"
+        "default": "Ctrl+Shift+K",
+        "mac": "Command+Shift+K"
       },
       "description": "Quick chat with Nanobot"
     }

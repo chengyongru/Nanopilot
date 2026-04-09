@@ -222,9 +222,26 @@
 
   /* -- Send ------------------------------------------------------------ */
 
-  function sendMessage() {
+  async function sendMessage() {
     const text = msgInput.value.trim();
-    if (!text || !ws?.connected || isStreaming) return;
+    if (!text || isStreaming) return;
+
+    // Auto-reconnect if disconnected
+    if (!ws?.connected) {
+      setConnStatus('connecting');
+      try {
+        await connectWs();
+      } catch {
+        setConnStatus('error', 'Connection failed');
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 300));
+    }
+
+    if (!ws?.connected) {
+      setConnStatus('error', 'Not connected');
+      return;
+    }
 
     const session = sessions.getActive();
     if (!session) return;

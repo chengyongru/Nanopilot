@@ -1,12 +1,15 @@
 import { SessionManager } from '../lib/session';
 import { loadSettings } from '../lib/storage';
 import { NanobotWsClient } from '../lib/ws-client';
+import { renderMarkdown, initCopyButtons } from '../lib/markdown';
 
 interface QuickChatState {
   visible: boolean;
   ws: NanobotWsClient | null;
   isStreaming: boolean;
   sessionId: string | null;
+  streamAccumulator: string;
+  streamRAF: number;
 }
 
 interface QuickChatApi {
@@ -34,6 +37,8 @@ declare global {
     ws: null,
     isStreaming: false,
     sessionId: null,
+    streamAccumulator: '',
+    streamRAF: 0,
   };
 
   function esc(s: string): string {
@@ -148,19 +153,37 @@ declare global {
       if (!state.isStreaming) {
         state.isStreaming = true;
         sendBtn.disabled = true;
-        appendMsg('assistant', text, false);
+        state.streamAccumulator = text;
+        appendMsg('assistant', state.streamAccumulator, false);
       } else {
-        const last = messagesEl.querySelector('.nb-msg.assistant:last-child .nb-body');
-        if (last) last.textContent += text;
-        messagesEl.scrollTop = messagesEl.scrollHeight;
+        state.streamAccumulator += text;
+        if (state.streamRAF) cancelAnimationFrame(state.streamRAF);
+        state.streamRAF = requestAnimationFrame(() => {
+          const last = messagesEl.querySelector('.nb-msg.assistant:last-child .nb-body');
+          if (last) {
+            last.innerHTML = renderMarkdown(state.streamAccumulator);
+          }
+          messagesEl.scrollTop = messagesEl.scrollHeight;
+          state.streamRAF = 0;
+        });
       }
       sessions.appendToLastAssistant(state.sessionId!, text);
     });
 
     state.ws.on('stream_end', () => {
       sessions.markLastAssistantDone(state.sessionId!);
+      if (state.streamRAF) {
+        cancelAnimationFrame(state.streamRAF);
+        state.streamRAF = 0;
+      }
+      const lastBody = messagesEl.querySelector('.nb-msg.assistant:last-child .nb-body');
+      if (lastBody) {
+        lastBody.innerHTML = renderMarkdown(state.streamAccumulator);
+        initCopyButtons(lastBody);
+      }
       const last = messagesEl.querySelector('.nb-msg.assistant:last-child');
       if (last) last.classList.remove('streaming');
+      state.streamAccumulator = '';
       state.isStreaming = false;
       sendBtn.disabled = false;
     });
@@ -188,10 +211,18 @@ declare global {
     const el = document.createElement('div');
     el.className = `nb-msg ${role}` + (role === 'assistant' && !finalized ? ' streaming' : '');
     const label = role === 'user' ? 'You' : 'Nanobot';
-    el.innerHTML = `
-      <span class="nb-role ${role}">${label}</span>
-      <pre class="nb-body">${esc(content)}</pre>
-    `;
+
+    const bodyEl = document.createElement('div');
+    bodyEl.className = 'nb-body';
+    if (role === 'assistant') {
+      bodyEl.innerHTML = renderMarkdown(content);
+      initCopyButtons(bodyEl);
+    } else {
+      bodyEl.textContent = content;
+    }
+
+    el.innerHTML = `<span class="nb-role ${role}">${label}</span>`;
+    el.appendChild(bodyEl);
     messagesEl.appendChild(el);
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }

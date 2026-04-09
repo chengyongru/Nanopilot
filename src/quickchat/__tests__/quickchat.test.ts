@@ -580,7 +580,7 @@ describe('quickchat', () => {
       await vi.waitFor(() => {
         const msgs = document.querySelectorAll('.nb-msg.assistant');
         expect(msgs.length).toBe(1);
-        expect(msgs[0].querySelector('.nb-body')?.textContent).toBe('Bot reply');
+        expect(msgs[0].querySelector('.nb-body')?.textContent?.trim()).toBe('Bot reply');
       });
     });
 
@@ -592,7 +592,7 @@ describe('quickchat', () => {
       await vi.waitFor(() => {
         const msgs = document.querySelectorAll('.nb-msg.assistant.streaming');
         expect(msgs.length).toBe(1);
-        expect(msgs[0].querySelector('.nb-body')?.textContent).toBe('Hel');
+        expect(msgs[0].querySelector('.nb-body')?.textContent?.trim()).toBe('Hel');
       });
       const sendBtn = document.querySelector('#nb-qc-send') as HTMLButtonElement;
       expect(sendBtn.disabled).toBe(true);
@@ -610,7 +610,7 @@ describe('quickchat', () => {
       ws.emit('delta', { text: 'lo' });
       await vi.waitFor(() => {
         const body = document.querySelector('.nb-msg.assistant .nb-body');
-        expect(body?.textContent).toBe('Hello');
+        expect(body?.textContent?.trim()).toBe('Hello');
       });
     });
 

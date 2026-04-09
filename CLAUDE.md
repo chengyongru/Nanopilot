@@ -36,6 +36,7 @@ Run a single test file: `npx vitest run src/lib/__tests__/storage.test.ts`
 - **`storage.ts`** — `chrome.storage.local` read/write for settings
 - **`session.ts`** — Session CRUD (create, list, switch, delete, append) persisted in `chrome.storage.local`
 - **`ws-client.ts`** — WebSocket client with automatic token issuance (fetches one-time token from `/auth/token`, then connects with `?token=...`)
+- **`markdown.ts`** — Markdown rendering pipeline: `marked` (GFM + breaks) + `highlight.js` (syntax highlighting) + `DOMPurify` (XSS sanitization). Exports `renderMarkdown()` and `initCopyButtons()`.
 
 ### Data Flow
 
@@ -52,4 +53,5 @@ Run a single test file: `npx vitest run src/lib/__tests__/storage.test.ts`
 - **Coverage thresholds**: 90% across lines, branches, functions, statements
 - **No runtime bundling between entry points** — each IIFE bundle is fully self-contained
 - **Quick chat CSS isolation** uses `#nb-qc-` prefixed selectors, not Shadow DOM
-- **Streaming responses** use `<pre>` with `textContent` updates (no HTML parsing per delta)
+- **Markdown rendering**: Assistant messages are rendered via `renderMarkdown()` (marked + highlight.js + DOMPurify). Streaming uses `requestAnimationFrame` to debounce re-renders of accumulated text. User messages remain plain text.
+- **Markdown dependencies**: `marked`, `highlight.js`, `dompurify` (bundled into sidepanel and quickchat IIFEs; service worker does not use them)

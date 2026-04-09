@@ -1,6 +1,7 @@
 import { SessionManager } from '../lib/session';
 import { NanobotWsClient } from '../lib/ws-client';
 import { loadSettings, saveSettings, DEFAULT_SETTINGS } from '../lib/storage';
+import { renderMarkdown, initCopyButtons } from '../lib/markdown';
 import type { Settings } from '../lib/types';
 
 (async function () {
@@ -111,6 +112,10 @@ import type { Settings } from '../lib/types';
     scrollToBottom();
   }
 
+  // rAF-based streaming accumulator
+  let streamAccumulator = '';
+  let streamRAF = 0;
+
   function appendMessageDOM(role: 'user' | 'assistant', content: string, finalized: boolean): HTMLDivElement {
     const msgEl = document.createElement('div');
     msgEl.className = `msg ${role}`;
@@ -119,7 +124,13 @@ import type { Settings } from '../lib/types';
     const roleLabel = role === 'user' ? 'You' : 'Nanobot';
     const bodyEl = document.createElement('div');
     bodyEl.className = 'msg-body';
-    bodyEl.textContent = content;
+
+    if (role === 'assistant') {
+      bodyEl.innerHTML = renderMarkdown(content);
+      initCopyButtons(bodyEl);
+    } else {
+      bodyEl.textContent = content;
+    }
 
     msgEl.innerHTML = `<span class="msg-role ${role}">${roleLabel}</span>`;
     msgEl.appendChild(bodyEl);
@@ -169,19 +180,37 @@ import type { Settings } from '../lib/types';
       if (!isStreaming) {
         isStreaming = true;
         updateSendBtn();
-        appendMessageDOM('assistant', text, false);
+        streamAccumulator = text;
+        appendMessageDOM('assistant', streamAccumulator, false);
       } else {
-        const last = messagesEl.querySelector('.msg.assistant:last-child .msg-body');
-        if (last) last.textContent += text;
-        scrollToBottom();
+        streamAccumulator += text;
+        if (streamRAF) cancelAnimationFrame(streamRAF);
+        streamRAF = requestAnimationFrame(() => {
+          const last = messagesEl.querySelector('.msg.assistant:last-child .msg-body');
+          if (last) {
+            last.innerHTML = renderMarkdown(streamAccumulator);
+          }
+          scrollToBottom();
+          streamRAF = 0;
+        });
       }
       sessions.appendToLastAssistant(session.id, text);
     });
 
     ws.on('stream_end', () => {
       sessions.markLastAssistantDone(session.id);
-      const last = messagesEl.querySelector('.msg.assistant:last-child');
-      if (last) last.classList.remove('streaming');
+      if (streamRAF) {
+        cancelAnimationFrame(streamRAF);
+        streamRAF = 0;
+      }
+      const lastBody = messagesEl.querySelector('.msg.assistant:last-child .msg-body');
+      if (lastBody) {
+        lastBody.innerHTML = renderMarkdown(streamAccumulator);
+        initCopyButtons(lastBody);
+      }
+      const lastMsg = messagesEl.querySelector('.msg.assistant:last-child');
+      if (lastMsg) lastMsg.classList.remove('streaming');
+      streamAccumulator = '';
       isStreaming = false;
       updateSendBtn();
     });

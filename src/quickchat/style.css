@@ -97,11 +97,14 @@
   padding: 8px 12px;
   border-radius: 8px;
   border: 1px solid #2c2e38;
-  font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace;
   font-size: 13px;
   line-height: 1.6;
-  white-space: pre-wrap;
   word-break: break-word;
+}
+
+#nb-qc-messages .nb-msg.user .nb-body {
+  font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace;
+  white-space: pre-wrap;
 }
 
 #nb-qc-messages .nb-msg.user .nb-body { background: #1e1f26; }
@@ -172,6 +175,136 @@
 #nb-qc-messages::-webkit-scrollbar { width: 5px; }
 #nb-qc-messages::-webkit-scrollbar-track { background: transparent; }
 #nb-qc-messages::-webkit-scrollbar-thumb { background: #32343e; border-radius: 3px; }
+
+/* -- Markdown rendering (quick chat) --------------------------------- */
+
+#nb-qc-messages .nb-msg.assistant .nb-body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+}
+
+#nb-qc-messages .nb-msg.assistant .nb-body > *:first-child { margin-top: 0; }
+#nb-qc-messages .nb-msg.assistant .nb-body > *:last-child { margin-bottom: 0; }
+
+#nb-qc-messages .nb-msg.assistant .nb-body p { margin: 6px 0; }
+#nb-qc-messages .nb-msg.assistant .nb-body p:first-child { margin-top: 0; }
+#nb-qc-messages .nb-msg.assistant .nb-body p:last-child { margin-bottom: 0; }
+
+#nb-qc-messages .nb-msg.assistant .nb-body h1,
+#nb-qc-messages .nb-msg.assistant .nb-body h2,
+#nb-qc-messages .nb-msg.assistant .nb-body h3,
+#nb-qc-messages .nb-msg.assistant .nb-body h4,
+#nb-qc-messages .nb-msg.assistant .nb-body h5,
+#nb-qc-messages .nb-msg.assistant .nb-body h6 {
+  margin: 12px 0 4px;
+  font-weight: 600;
+  color: #e6e8ed;
+  line-height: 1.3;
+}
+#nb-qc-messages .nb-msg.assistant .nb-body h1 { font-size: 1.35em; }
+#nb-qc-messages .nb-msg.assistant .nb-body h2 { font-size: 1.2em; }
+#nb-qc-messages .nb-msg.assistant .nb-body h3 { font-size: 1.1em; }
+
+#nb-qc-messages .nb-msg.assistant .nb-body ul,
+#nb-qc-messages .nb-msg.assistant .nb-body ol {
+  margin: 6px 0;
+  padding-left: 20px;
+}
+
+#nb-qc-messages .nb-msg.assistant .nb-body li { margin: 2px 0; }
+
+#nb-qc-messages .nb-msg.assistant .nb-body a {
+  color: #539bf5;
+  text-decoration: none;
+}
+#nb-qc-messages .nb-msg.assistant .nb-body a:hover { text-decoration: underline; }
+
+#nb-qc-messages .nb-msg.assistant .nb-body blockquote {
+  margin: 6px 0;
+  padding: 4px 12px;
+  border-left: 3px solid #373a46;
+  color: #b0b4be;
+  background: #1e1f26;
+  border-radius: 0 3px 3px 0;
+}
+
+#nb-qc-messages .nb-msg.assistant .nb-body pre {
+  margin: 8px 0;
+  padding: 10px 12px;
+  background: #0d0e11;
+  border: 1px solid #2c2e38;
+  border-radius: 5px;
+  overflow-x: auto;
+  position: relative;
+}
+
+#nb-qc-messages .nb-msg.assistant .nb-body pre code {
+  font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  background: none;
+  padding: 0;
+  border-radius: 0;
+}
+
+#nb-qc-messages .nb-msg.assistant .nb-body code {
+  font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace;
+  font-size: 0.9em;
+  padding: 2px 6px;
+  background: #282a33;
+  border-radius: 3px;
+  color: #539bf5;
+}
+
+#nb-qc-messages .nb-msg.assistant .nb-body table {
+  border-collapse: collapse;
+  margin: 8px 0;
+  width: 100%;
+  font-size: 12px;
+}
+
+#nb-qc-messages .nb-msg.assistant .nb-body th,
+#nb-qc-messages .nb-msg.assistant .nb-body td {
+  border: 1px solid #2c2e38;
+  padding: 5px 8px;
+  text-align: left;
+}
+
+#nb-qc-messages .nb-msg.assistant .nb-body th {
+  background: #1e1f26;
+  font-weight: 600;
+  color: #e6e8ed;
+}
+
+#nb-qc-messages .nb-msg.assistant .nb-body td {
+  background: #16171c;
+}
+
+#nb-qc-messages .nb-msg.assistant .nb-body hr {
+  border: none;
+  border-top: 1px solid #2c2e38;
+  margin: 10px 0;
+}
+
+/* Code block copy button */
+#nb-qc-messages .nb-msg.assistant .nb-body pre .nb-copy-btn {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  padding: 2px 8px;
+  font-size: 11px;
+  color: #555a66;
+  background: #282a33;
+  border: 1px solid #2c2e38;
+  border-radius: 3px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .15s, color .15s, background .15s;
+}
+#nb-qc-messages .nb-msg.assistant .nb-body pre:hover .nb-copy-btn { opacity: 1; }
+#nb-qc-messages .nb-msg.assistant .nb-body pre .nb-copy-btn:hover {
+  color: #e6e8ed;
+  background: #32343e;
+}
 
 /* Animations */
 @keyframes nb-fade-in { from { opacity: 0; } to { opacity: 1; } }

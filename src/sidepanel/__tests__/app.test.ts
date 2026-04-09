@@ -690,7 +690,7 @@ describe('sidepanel app', () => {
       const msgs = document.querySelectorAll('.msg');
       expect(msgs.length).toBe(2);
       expect(msgs[0].querySelector('.msg-body')?.textContent).toBe('Hello');
-      expect(msgs[1].querySelector('.msg-body')?.textContent).toBe('Hi there!');
+      expect(msgs[1].querySelector('.msg-body')?.textContent?.trim()).toBe('Hi there!');
     });
   });
 
@@ -838,7 +838,7 @@ describe('sidepanel app', () => {
       await vi.waitFor(() => {
         const msgs = document.querySelectorAll('.msg.assistant');
         expect(msgs.length).toBe(1);
-        expect(msgs[0].querySelector('.msg-body')?.textContent).toBe('Hello from bot');
+        expect(msgs[0].querySelector('.msg-body')?.textContent?.trim()).toBe('Hello from bot');
       });
     });
 
@@ -855,7 +855,7 @@ describe('sidepanel app', () => {
       await vi.waitFor(() => {
         const msgs = document.querySelectorAll('.msg.assistant.streaming');
         expect(msgs.length).toBe(1);
-        expect(msgs[0].querySelector('.msg-body')?.textContent).toBe('Hel');
+        expect(msgs[0].querySelector('.msg-body')?.textContent?.trim()).toBe('Hel');
       });
       // Send button should be disabled during streaming
       const sendBtn = document.querySelector('#btn-send') as HTMLButtonElement;
@@ -879,7 +879,7 @@ describe('sidepanel app', () => {
       ws.emit('delta', { text: 'lo' });
       await vi.waitFor(() => {
         const body = document.querySelector('.msg.assistant .msg-body');
-        expect(body?.textContent).toBe('Hello');
+        expect(body?.textContent?.trim()).toBe('Hello');
       });
     });
 

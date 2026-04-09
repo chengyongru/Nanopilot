@@ -1,0 +1,179 @@
+/* -- Quick chat overlay (injected into pages) ------------------------- */
+/* All selectors scoped to #nb-qc to avoid page conflicts. */
+
+#nb-qc-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483646;
+  background: rgba(0, 0, 0, 0.45);
+  animation: nb-fade-in .12s ease-out;
+}
+
+#nb-qc-container {
+  position: fixed;
+  top: 12%;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2147483647;
+  width: min(640px, 90vw);
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  background: #16171c;
+  border: 1px solid #2c2e38;
+  border-radius: 12px;
+  box-shadow: 0 8px 40px rgba(0,0,0,.5);
+  animation: nb-slide-down .15s ease-out;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  font-size: 13px;
+  color: #e6e8ed;
+  overflow: hidden;
+}
+
+/* Header bar */
+#nb-qc-header {
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  height: 42px;
+  border-bottom: 1px solid #2c2e38;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+#nb-qc-header .nb-logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px; height: 22px;
+  border-radius: 4px;
+  background: #539bf5;
+  color: #fff;
+  font-weight: 700;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+#nb-qc-header .nb-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: #b0b4be;
+}
+
+#nb-qc-header .nb-shortcut {
+  margin-left: auto;
+  font-size: 11px;
+  color: #555a66;
+  padding: 2px 6px;
+  border: 1px solid #373a46;
+  border-radius: 3px;
+  font-family: 'SF Mono', Consolas, monospace;
+}
+
+/* Messages area */
+#nb-qc-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 100px;
+  max-height: 50vh;
+}
+
+#nb-qc-messages .nb-msg { display: flex; flex-direction: column; gap: 3px; }
+
+#nb-qc-messages .nb-role {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+}
+#nb-qc-messages .nb-role.user { color: #539bf5; }
+#nb-qc-messages .nb-role.assistant { color: #57ab5a; }
+
+#nb-qc-messages .nb-body {
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid #2c2e38;
+  font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+#nb-qc-messages .nb-msg.user .nb-body { background: #1e1f26; }
+#nb-qc-messages .nb-msg.assistant .nb-body { background: #0d0e11; }
+#nb-qc-messages .nb-msg.assistant.streaming .nb-body { border-color: #3a6fd8; }
+
+/* Status */
+#nb-qc-status {
+  padding: 0 14px 4px;
+  font-size: 11px;
+  color: #555a66;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+#nb-qc-status .nb-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+}
+#nb-qc-status.connected .nb-dot { background: #57ab5a; }
+#nb-qc-status.connecting .nb-dot { background: #c69026; animation: nb-pulse 1s infinite; }
+#nb-qc-status.error .nb-dot { background: #e5534b; }
+
+/* Input area */
+#nb-qc-input-area {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 8px 14px 12px;
+  border-top: 1px solid #2c2e38;
+  flex-shrink: 0;
+}
+
+#nb-qc-input {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid #2c2e38;
+  border-radius: 8px;
+  background: #1e1f26;
+  color: #e6e8ed;
+  font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace;
+  font-size: 13px;
+  outline: none;
+  resize: none;
+  max-height: 80px;
+  transition: border-color .15s;
+}
+#nb-qc-input:focus { border-color: #3a6fd8; }
+#nb-qc-input::placeholder { color: #555a66; }
+
+#nb-qc-send {
+  width: 34px; height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #539bf5;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background .15s;
+}
+#nb-qc-send:hover { background: #3a6fd8; }
+#nb-qc-send:disabled { opacity: .4; cursor: not-allowed; }
+
+/* Scrollbar */
+#nb-qc-messages::-webkit-scrollbar { width: 5px; }
+#nb-qc-messages::-webkit-scrollbar-track { background: transparent; }
+#nb-qc-messages::-webkit-scrollbar-thumb { background: #32343e; border-radius: 3px; }
+
+/* Animations */
+@keyframes nb-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes nb-slide-down { from { opacity: 0; transform: translateX(-50%) translateY(-10px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
+@keyframes nb-pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }

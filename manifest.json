@@ -3,7 +3,8 @@
   "name": "Nanobot",
   "version": "0.1.0",
   "description": "AI assistant powered by Nanobot",
-  "permissions": ["storage", "activeTab", "scripting"],
+  "permissions": ["storage", "activeTab", "scripting", "sidePanel"],
+  "host_permissions": ["http://*/*", "https://*/*"],
   "side_panel": {
     "default_path": "sidepanel/index.html"
   },

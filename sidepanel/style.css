@@ -386,6 +386,20 @@ body { display: flex; }
 }
 #settings-form input:focus { border-color: var(--accent-dim); }
 
+.input-with-toggle {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.input-with-toggle input { padding-right: 34px; width: 100%; }
+.toggle-pw {
+  position: absolute;
+  right: 4px;
+  width: 28px; height: 28px;
+  color: var(--text-3);
+}
+.toggle-pw:hover { color: var(--text-1); }
+
 .form-actions {
   display: flex;
   justify-content: flex-end;

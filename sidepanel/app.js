@@ -302,6 +302,17 @@
     msgInput.style.height = Math.min(msgInput.scrollHeight, 120) + 'px';
   });
 
+  // Toggle password visibility for secret field
+  const secretInput = $('#s-secret');
+  const toggleBtn = $('#btn-toggle-secret');
+  toggleBtn.addEventListener('click', () => {
+    const showing = secretInput.type === 'text';
+    secretInput.type = showing ? 'password' : 'text';
+    toggleBtn.querySelector('.eye-open').style.display = showing ? '' : 'none';
+    toggleBtn.querySelector('.eye-closed').style.display = showing ? 'none' : '';
+    toggleBtn.title = showing ? 'Show password' : 'Hide password';
+  });
+
   /* -- Helpers --------------------------------------------------------- */
 
   function esc(str) {

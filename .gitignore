@@ -1,4 +1,5 @@
 node_modules/
 .vitest/
+coverage/
 *.tsbuildinfo
 # dist/ is NOT ignored — it must be committed for end users to load

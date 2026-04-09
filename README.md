@@ -49,7 +49,3 @@ Pin it to your toolbar via the puzzle icon.
 ## Compatibility
 
 Chrome 116+ and Edge 116+. Firefox and Safari are on the roadmap.
-
-## License
-
-MIT

@@ -54492,7 +54492,7 @@ Please report this to https://github.com/markedjs/marked.`, e) {
     container.id = "nb-qc-container";
     container.innerHTML = `
     <div id="nb-qc-header">
-      <img class="nb-logo" src="../icons/logo-cat.png" alt="Nanobot">
+      <img class="nb-logo" src="${chrome.runtime.getURL("icons/logo-cat.png")}" alt="Nanobot">
       <span class="nb-title">Ask Nanobot</span>
       <span class="nb-shortcut">Esc to close</span>
     </div>

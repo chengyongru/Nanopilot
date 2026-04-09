@@ -32,5 +32,11 @@
       },
       "description": "Quick chat with Nanobot"
     }
-  }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/logo-cat.png"],
+      "matches": ["http://*/*", "https://*/*"]
+    }
+  ]
 }

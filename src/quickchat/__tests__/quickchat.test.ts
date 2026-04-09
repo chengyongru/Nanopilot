@@ -80,6 +80,7 @@ describe('quickchat', () => {
     vi.stubGlobal('chrome', {
       runtime: {
         id: 'ext-id',
+        getURL: (path: string) => `chrome-extension://ext-id/${path}`,
         onMessage: {
           addListener: vi.fn(),
           removeListener: vi.fn(),
@@ -705,6 +706,7 @@ describe('quickchat', () => {
     vi.stubGlobal('chrome', {
       runtime: {
         id: 'ext-id',
+        getURL: (path: string) => `chrome-extension://ext-id/${path}`,
         onMessage: {
           addListener: vi.fn(),
           removeListener: vi.fn(),

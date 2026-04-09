@@ -70,7 +70,7 @@ function buildDOM(): string {
   return `
     <div id="session-list"></div>
     <div id="empty-state">
-      <div class="empty-icon">N</div>
+      <img class="empty-icon" src="../icons/logo-cat.png" alt="Nanobot">
       <p>New Conversation</p>
     </div>
     <div id="messages" class="hidden"></div>

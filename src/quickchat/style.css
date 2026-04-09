@@ -42,15 +42,9 @@
 }
 
 #nb-qc-header .nb-logo {
-  display: flex;
-  align-items: center;
-  justify-content: center;
   width: 22px; height: 22px;
-  border-radius: 4px;
-  background: #539bf5;
-  color: #fff;
-  font-weight: 700;
-  font-size: 12px;
+  object-fit: contain;
+  border-radius: 3px;
   flex-shrink: 0;
 }
 

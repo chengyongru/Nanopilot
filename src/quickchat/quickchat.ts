@@ -54,7 +54,7 @@ declare global {
   container.id = 'nb-qc-container';
   container.innerHTML = `
     <div id="nb-qc-header">
-      <span class="nb-logo">N</span>
+      <img class="nb-logo" src="../icons/logo-cat.png" alt="Nanobot">
       <span class="nb-title">Ask Nanobot</span>
       <span class="nb-shortcut">Esc to close</span>
     </div>

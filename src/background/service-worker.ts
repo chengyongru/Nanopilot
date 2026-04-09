@@ -21,25 +21,28 @@ chrome.commands.onCommand.addListener(async (command: string) => {
   if (command !== 'quick-chat') return;
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab) return;
-  // Skip chrome:// and edge:// pages
-  if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('edge://')) return;
+  if (!tab?.id) return;
 
   try {
     // If overlay already injected, toggle it
-    await chrome.tabs.sendMessage(tab.id!, { type: 'NB_QUICKCHAT_TOGGLE' });
+    await chrome.tabs.sendMessage(tab.id, { type: 'NB_QUICKCHAT_TOGGLE' });
   } catch {
-    // Not injected yet — inject CSS then scripts
-    await chrome.scripting.insertCSS({
-      target: { tabId: tab.id! },
-      files: ['quickchat/style.css'],
-    });
-    await chrome.scripting.executeScript({
-      target: { tabId: tab.id! },
-      files: [
-        'quickchat/quickchat.js',
-      ],
-    });
+    // Not injected yet — inject CSS then scripts.
+    // Errors on restricted URLs (chrome://, edge://, etc.) are silently ignored.
+    try {
+      await chrome.scripting.insertCSS({
+        target: { tabId: tab.id },
+        files: ['quickchat/style.css'],
+      });
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: [
+          'quickchat/quickchat.js',
+        ],
+      });
+    } catch {
+      // Restricted URL — cannot inject content scripts here
+    }
   }
 });
 

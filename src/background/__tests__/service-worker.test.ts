@@ -6,7 +6,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 let addListenerSpies: Record<string, ReturnType<typeof vi.fn>>;
 
+const mockQuery = vi.fn().mockResolvedValue([{ id: 1, url: 'https://example.com' }]);
+const mockSendMessage = vi.fn().mockResolvedValue(undefined);
+const mockInsertCSS = vi.fn().mockResolvedValue(undefined);
+const mockExecuteScript = vi.fn().mockResolvedValue(undefined);
+
 function setupChrome(): void {
+  mockQuery.mockResolvedValue([{ id: 1, url: 'https://example.com' }]);
+  mockSendMessage.mockResolvedValue(undefined);
+  mockInsertCSS.mockResolvedValue(undefined);
+  mockExecuteScript.mockResolvedValue(undefined);
+
   const actionOnClicked = { addListener: vi.fn() };
   const commandsOnCommand = { addListener: vi.fn() };
   const runtimeOnMessage = { addListener: vi.fn() };
@@ -23,14 +33,14 @@ function setupChrome(): void {
     runtime: { onMessage: runtimeOnMessage },
     sidePanel: { open: vi.fn().mockResolvedValue(undefined) },
     tabs: {
-      query: vi.fn().mockResolvedValue([{ id: 1, url: 'https://example.com' }]),
-      sendMessage: vi.fn().mockResolvedValue(undefined),
+      query: mockQuery,
+      sendMessage: mockSendMessage,
     },
     scripting: {
-      insertCSS: vi.fn().mockResolvedValue(undefined),
-      executeScript: vi.fn().mockResolvedValue(undefined),
+      insertCSS: mockInsertCSS,
+      executeScript: mockExecuteScript,
     },
-  });
+  } as unknown as typeof chrome);
 }
 
 // ---------------------------------------------------------------------------
@@ -41,7 +51,8 @@ function setupChrome(): void {
 async function importAndGetMessageHandler() {
   vi.resetModules();
   setupChrome();
-  await import('../service-worker');
+// @ts-expect-error -- service-worker.ts is not a module; imported for side effects
+await import('../service-worker');
   const handler = addListenerSpies.runtimeOnMessage.mock.calls[0][0] as (
     msg: unknown,
     sender: chrome.runtime.MessageSender,
@@ -100,32 +111,8 @@ describe('service-worker', () => {
       expect(chrome.tabs.query).not.toHaveBeenCalled();
     });
 
-    it('skips chrome:// pages', async () => {
-      chrome.tabs.query.mockResolvedValueOnce([{ id: 1, url: 'chrome://settings' }]);
-      const commandHandler = addListenerSpies.commandsOnCommand.mock.calls[0][0];
-      await commandHandler('quick-chat');
-      expect(chrome.tabs.sendMessage).not.toHaveBeenCalled();
-      expect(chrome.scripting.insertCSS).not.toHaveBeenCalled();
-    });
-
-    it('skips edge:// pages', async () => {
-      chrome.tabs.query.mockResolvedValueOnce([{ id: 1, url: 'edge://settings' }]);
-      const commandHandler = addListenerSpies.commandsOnCommand.mock.calls[0][0];
-      await commandHandler('quick-chat');
-      expect(chrome.tabs.sendMessage).not.toHaveBeenCalled();
-      expect(chrome.scripting.insertCSS).not.toHaveBeenCalled();
-    });
-
-    it('handles tab with no URL', async () => {
-      chrome.tabs.query.mockResolvedValueOnce([{ id: 1 }]);
-      const commandHandler = addListenerSpies.commandsOnCommand.mock.calls[0][0];
-      await commandHandler('quick-chat');
-      expect(chrome.tabs.sendMessage).not.toHaveBeenCalled();
-      expect(chrome.scripting.insertCSS).not.toHaveBeenCalled();
-    });
-
     it('handles no active tab', async () => {
-      chrome.tabs.query.mockResolvedValueOnce([]);
+      mockQuery.mockResolvedValueOnce([]);
       const commandHandler = addListenerSpies.commandsOnCommand.mock.calls[0][0];
       await commandHandler('quick-chat');
       expect(chrome.tabs.sendMessage).not.toHaveBeenCalled();
@@ -133,7 +120,7 @@ describe('service-worker', () => {
     });
 
     it('toggles overlay if already injected (sendMessage succeeds)', async () => {
-      chrome.tabs.sendMessage.mockResolvedValueOnce(undefined);
+      mockSendMessage.mockResolvedValueOnce(undefined);
       const commandHandler = addListenerSpies.commandsOnCommand.mock.calls[0][0];
       await commandHandler('quick-chat');
       expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(1, { type: 'NB_QUICKCHAT_TOGGLE' });
@@ -141,7 +128,7 @@ describe('service-worker', () => {
     });
 
     it('injects CSS + scripts if overlay not yet injected (sendMessage fails)', async () => {
-      chrome.tabs.sendMessage.mockRejectedValueOnce(new Error('no receiver'));
+      mockSendMessage.mockRejectedValueOnce(new Error('no receiver'));
       const commandHandler = addListenerSpies.commandsOnCommand.mock.calls[0][0];
       await commandHandler('quick-chat');
 
@@ -155,6 +142,14 @@ describe('service-worker', () => {
           'quickchat/quickchat.js',
         ],
       });
+    });
+
+    it('silently ignores injection failure on restricted URLs', async () => {
+      mockSendMessage.mockRejectedValueOnce(new Error('no receiver'));
+      mockInsertCSS.mockRejectedValueOnce(new Error('Cannot access'));
+      mockExecuteScript.mockRejectedValueOnce(new Error('Cannot access'));
+      const commandHandler = addListenerSpies.commandsOnCommand.mock.calls[0][0];
+      await expect(commandHandler('quick-chat')).resolves.toBeUndefined();
     });
   });
 
@@ -239,7 +234,7 @@ describe('service-worker', () => {
 
       const result = handler(
         { type: 'NB_WS_CONNECT', url: 'ws://localhost:8765/ws' },
-        { tab: { id: 42 } },
+        { tab: { id: 42 } } as chrome.runtime.MessageSender,
         sendResponse,
       );
 
@@ -274,13 +269,13 @@ describe('service-worker', () => {
 
       handler(
         { type: 'NB_WS_CONNECT', url: 'ws://localhost/a' },
-        { tab: { id: 1 } },
+        { tab: { id: 1 } } as chrome.runtime.MessageSender,
         sendResponse,
       );
 
       handler(
         { type: 'NB_WS_CONNECT', url: 'ws://localhost/b' },
-        { tab: { id: 2 } },
+        { tab: { id: 2 } } as chrome.runtime.MessageSender,
         sendResponse,
       );
 
@@ -295,7 +290,7 @@ describe('service-worker', () => {
 
       const result = handler(
         { type: 'NB_WS_CONNECT', url: 'bad-url' },
-        { tab: { id: 1 } },
+        { tab: { id: 1 } } as chrome.runtime.MessageSender,
         sendResponse,
       );
 
@@ -315,7 +310,7 @@ describe('service-worker', () => {
 
       handler(
         { type: 'NB_WS_CONNECT', url: 'ws://localhost/ws' },
-        { tab: { id: 42 } },
+        { tab: { id: 42 } } as chrome.runtime.MessageSender,
         sendResponse,
       );
 
@@ -339,7 +334,7 @@ describe('service-worker', () => {
 
       handler(
         { type: 'NB_WS_CONNECT', url: 'ws://localhost/ws' },
-        { tab: { id: 42 } },
+        { tab: { id: 42 } } as chrome.runtime.MessageSender,
         sendResponse,
       );
 
@@ -365,7 +360,7 @@ describe('service-worker', () => {
 
       handler(
         { type: 'NB_WS_CONNECT', url: 'ws://localhost/ws' },
-        { tab: { id: 42 } },
+        { tab: { id: 42 } } as chrome.runtime.MessageSender,
         sendResponse,
       );
 
@@ -392,7 +387,7 @@ describe('service-worker', () => {
 
       handler(
         { type: 'NB_WS_CONNECT', url: 'ws://localhost/ws' },
-        { tab: { id: 42 } },
+        { tab: { id: 42 } } as chrome.runtime.MessageSender,
         sendResponse,
       );
 
@@ -417,7 +412,7 @@ describe('service-worker', () => {
 
       handler(
         { type: 'NB_WS_CONNECT', url: 'ws://localhost/ws' },
-        { tab: { id: 42 } },
+        { tab: { id: 42 } } as chrome.runtime.MessageSender,
         sendResponse,
       );
 
@@ -449,11 +444,11 @@ describe('service-worker', () => {
         readyState: WebSocket.OPEN,
       };
       vi.stubGlobal('WebSocket', vi.fn().mockImplementation(() => mockWs));
-      chrome.tabs.sendMessage.mockRejectedValue(new Error('tab closed'));
+      mockSendMessage.mockRejectedValue(new Error('tab closed'));
 
       handler(
         { type: 'NB_WS_CONNECT', url: 'ws://localhost/ws' },
-        { tab: { id: 42 } },
+        { tab: { id: 42 } } as chrome.runtime.MessageSender,
         sendResponse,
       );
 
@@ -482,7 +477,7 @@ describe('service-worker', () => {
 
       handler(
         { type: 'NB_WS_CONNECT', url: 'ws://localhost/ws' },
-        { tab: { id: 1 } },
+        { tab: { id: 1 } } as chrome.runtime.MessageSender,
         sendResponse,
       );
 
@@ -539,7 +534,7 @@ describe('service-worker', () => {
 
       handler(
         { type: 'NB_WS_CONNECT', url: 'ws://localhost/ws' },
-        { tab: { id: 1 } },
+        { tab: { id: 1 } } as chrome.runtime.MessageSender,
         sendResponse,
       );
 

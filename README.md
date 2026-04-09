@@ -32,8 +32,9 @@ cd Nanopilot
 npm install
 npm run build        # build to dist/
 npm test             # run tests
+npm run test:watch   # tests in watch mode
 npm run test:coverage # tests with coverage report
-npm run dev          # watch mode
+npm run dev          # build in watch mode
 ```
 
 Load the **`dist/`** folder in Chrome for development.

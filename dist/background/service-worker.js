@@ -6,21 +6,23 @@
   chrome.commands.onCommand.addListener(async (command) => {
     if (command !== "quick-chat") return;
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab) return;
-    if (!tab.url || tab.url.startsWith("chrome://") || tab.url.startsWith("edge://")) return;
+    if (!tab?.id) return;
     try {
       await chrome.tabs.sendMessage(tab.id, { type: "NB_QUICKCHAT_TOGGLE" });
     } catch {
-      await chrome.scripting.insertCSS({
-        target: { tabId: tab.id },
-        files: ["quickchat/style.css"]
-      });
-      await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        files: [
-          "quickchat/quickchat.js"
-        ]
-      });
+      try {
+        await chrome.scripting.insertCSS({
+          target: { tabId: tab.id },
+          files: ["quickchat/style.css"]
+        });
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          files: [
+            "quickchat/quickchat.js"
+          ]
+        });
+      } catch {
+      }
     }
   });
   let relayWs = null;

@@ -41,9 +41,9 @@ Pin it to your toolbar via the puzzle icon.
 
 ## Quick Start
 
-1. Make sure Nanobot is running with WebSocket enabled (see [Setup Guide](docs/setup.md))
-2. Click the extension icon → open Settings (gear icon)
-3. Fill in your host, port, and token issue secret → Save
+1. Install Nanopilot from the [latest release](https://github.com/chengyongru/Nanopilot/releases) — see [Setup Guide](docs/setup.md) for details
+2. Ask your Nanobot to configure its WebSocket channel (the setup guide has a ready-to-use prompt)
+3. Paste the 5 values into Nanopilot's Settings → Save
 4. Start chatting
 
 ## Architecture

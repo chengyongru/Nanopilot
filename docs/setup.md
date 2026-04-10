@@ -1,15 +1,63 @@
 # Setup Guide
 
-## Nanobot Side
+## Prerequisites
 
-Add a WebSocket channel to your `~/.nanobot/config.json`:
+- **Chrome 120+** or **Edge 120+**
+- A running Nanobot instance with a **public IP or domain** (the extension runs in your browser, so `127.0.0.1` only works if Nanobot is on the same machine)
+- If your Nanobot is behind NAT, use a tunneling service (Cloudflare Tunnel, ngrok, etc.) or a reverse proxy (nginx, Caddy)
+
+---
+
+## Setup in 3 Steps
+
+### Step 1: Install Nanopilot
+
+1. Download the zip from the [latest release](https://github.com/chengyongru/Nanopilot/releases)
+2. Open `chrome://extensions` → enable **Developer mode** (top-right)
+3. Click **Load unpacked** → select the extracted folder
+4. Pin it to your toolbar via the puzzle icon
+
+### Step 2: Ask Nanobot to Configure Itself
+
+Send this message to your Nanobot (via your existing channel, e.g. Feishu, terminal, etc.):
+
+```
+Please configure a WebSocket channel for me. Here's what I need:
+
+1. Enable the WebSocket channel in my config.json with `host` set to `0.0.0.0` so it accepts external connections.
+2. Use issued-token authentication (not a static token). Generate a strong `tokenIssueSecret` for me.
+3. Enable streaming.
+4. After configuring, restart the gateway.
+5. Then give me the following values in a clear copy-paste format so I can fill them into Nanopilot's extension settings:
+   - Host: (my public IP or domain)
+   - Port: (the WebSocket port)
+   - WS Path: (the WebSocket path)
+   - Token Issue Path: (the token issue path)
+   - Token Issue Secret: (the generated secret)
+
+Reference: https://github.com/HKUDS/nanobot/blob/main/docs/WEBSOCKET.md
+```
+
+Your Nanobot will handle the entire configuration and output the exact values you need.
+
+### Step 3: Paste & Connect
+
+1. Click the Nanopilot icon in your toolbar → open **Settings** (gear icon)
+2. Paste the 5 values from your Nanobot's response into the corresponding fields
+3. Click **Save** — you're connected!
+
+---
+
+## Manual Configuration (Optional)
+
+If you prefer to configure Nanobot manually, add a WebSocket channel to your `~/.nanobot/config.json`:
 
 ```json
 {
   "channels": {
     "websocket": {
       "enabled": true,
-      "host": "127.0.0.1",
+      "host": "0.0.0.0",
       "port": 8765,
       "path": "/ws",
       "tokenIssuePath": "/auth/token",
@@ -23,28 +71,26 @@ Add a WebSocket channel to your `~/.nanobot/config.json`:
 }
 ```
 
-Then start Nanobot:
+Then restart Nanobot:
 
 ```bash
 nanobot gateway
 ```
 
-You should see `WebSocket server listening on ws://127.0.0.1:8765/ws` in the logs.
+You should see `WebSocket server listening on ws://0.0.0.0:8765/ws` in the logs.
 
-## Extension Side
-
-Open the side panel (click the toolbar icon), then click the gear icon. The settings:
+### Extension Settings Reference
 
 | Field | Default | What it does |
 |-------|---------|-------------|
-| Host | `127.0.0.1` | Where Nanobot is running |
+| Host | `127.0.0.1` | Where Nanobot is running (use your public IP or domain) |
 | Port | `8765` | WebSocket port |
 | WS Path | `/ws` | The WebSocket endpoint path |
 | Token Issue Path | `/auth/token` | HTTP path to get a short-lived token |
 | Token Issue Secret | *(empty)* | Shared secret for token requests |
 | Client ID | `browser-extension` | How this extension identifies itself |
 
-Click **Save**. The extension will reconnect automatically.
+---
 
 ## How Auth Works
 
@@ -69,6 +115,7 @@ If your Nanobot instance sits behind HTTPS, set `sslCertfile` and `sslKeyfile` i
 - Verify Nanobot is running and the WebSocket channel is enabled
 - Double-check the host, port, and secret in Settings
 - If the token issue returns 401, the secret doesn't match
+- Make sure your Nanobot is accessible from your browser (check firewall, public IP, NAT)
 
 **Ctrl+Shift+K does nothing**
 

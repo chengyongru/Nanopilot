@@ -113,16 +113,36 @@ function buildDOM(): string {
 }
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Import app module and wait for its async initialization to complete. */
+async function importApp(): Promise<void> {
+  const mod = await import('../app');
+  await mod.ready;
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 describe('sidepanel app', () => {
   let storedSessions: Record<string, unknown>;
   let storedActive: string | null;
+  /** Generation counter — incremented each beforeEach to reject stale async writes. */
+  let generation = 0;
 
   beforeEach(async () => {
     vi.restoreAllMocks();
     vi.resetModules();
+
+    // Flush any pending setTimeout from previous test's SessionManager._persist()
+    vi.useFakeTimers();
+    vi.runAllTimers();
+    vi.useRealTimers();
+
+    generation++;
+    const myGen = generation;
 
     storedSessions = {};
     storedActive = null;
@@ -140,6 +160,8 @@ describe('sidepanel app', () => {
             return result;
           }),
           set: vi.fn(async (data: Record<string, unknown>) => {
+            // Reject writes from stale IIFEs of previous tests
+            if (myGen !== generation) return;
             if ('nb_sessions' in data) storedSessions = data.nb_sessions as Record<string, unknown>;
             if ('nb_active_session' in data) storedActive = data.nb_active_session as string | null;
           }),
@@ -161,17 +183,17 @@ describe('sidepanel app', () => {
   // Basic loading
   // =========================================================================
   it('should load without errors', async () => {
-    await import('../app');
+    await importApp();
   });
 
   it('should render empty session list when no sessions', async () => {
-    await import('../app');
+    await importApp();
     const list = document.querySelector('#session-list');
     expect(list?.textContent).toContain('No sessions');
   });
 
   it('should show empty state initially when no sessions', async () => {
-    await import('../app');
+    await importApp();
     const emptyState = document.querySelector('#empty-state');
     expect(emptyState?.classList.contains('hidden')).toBe(false);
     expect(document.querySelector('#messages')?.classList.contains('hidden')).toBe(true);
@@ -182,7 +204,7 @@ describe('sidepanel app', () => {
   // createNewSession
   // =========================================================================
   it('should create a new session on btn-new click', async () => {
-    await import('../app');
+    await importApp();
     const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
     btnNew.click();
     await vi.waitFor(() => {
@@ -196,7 +218,7 @@ describe('sidepanel app', () => {
   });
 
   it('should focus msg-input after creating new session', async () => {
-    await import('../app');
+    await importApp();
     const input = document.querySelector('#msg-input') as HTMLTextAreaElement;
     const focusSpy = vi.spyOn(input, 'focus');
     const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
@@ -220,7 +242,7 @@ describe('sidepanel app', () => {
     };
     storedActive = sessionId;
 
-    await import('../app');
+    await importApp();
     const items = document.querySelectorAll('.session-item');
     expect(items.length).toBe(1);
     expect(items[0].classList.contains('active')).toBe(true);
@@ -231,7 +253,7 @@ describe('sidepanel app', () => {
   // switchSession
   // =========================================================================
   it('should switch session on session-item click', async () => {
-    await import('../app');
+    await importApp();
     const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
     btnNew.click();
     await vi.waitFor(() => {
@@ -256,7 +278,7 @@ describe('sidepanel app', () => {
   // deleteSession
   // =========================================================================
   it('should delete session on delete button click', async () => {
-    await import('../app');
+    await importApp();
     const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
     btnNew.click();
     await vi.waitFor(() => {
@@ -272,7 +294,7 @@ describe('sidepanel app', () => {
   });
 
   it('should show empty state and disconnected when deleting last session', async () => {
-    await import('../app');
+    await importApp();
     const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
     btnNew.click();
     await vi.waitFor(() => {
@@ -288,7 +310,7 @@ describe('sidepanel app', () => {
   });
 
   it('should switch to another session when deleting active one and others exist', async () => {
-    await import('../app');
+    await importApp();
     const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
     btnNew.click();
     await vi.waitFor(() => {
@@ -314,7 +336,7 @@ describe('sidepanel app', () => {
   // appendMessageDOM
   // =========================================================================
   it('should append user messages correctly', async () => {
-    await import('../app');
+    await importApp();
     const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
     btnNew.click();
     await vi.waitFor(() => {
@@ -334,7 +356,7 @@ describe('sidepanel app', () => {
   });
 
   it('should render streaming assistant messages with streaming class', async () => {
-    await import('../app');
+    await importApp();
     const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
     btnNew.click();
     await vi.waitFor(() => {
@@ -356,7 +378,7 @@ describe('sidepanel app', () => {
   // sendMessage
   // =========================================================================
   it('should not send empty message', async () => {
-    await import('../app');
+    await importApp();
     const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
     btnNew.click();
     await vi.waitFor(() => {
@@ -373,7 +395,7 @@ describe('sidepanel app', () => {
   });
 
   it('should clear input after sending', async () => {
-    await import('../app');
+    await importApp();
     const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
     btnNew.click();
     await vi.waitFor(() => {
@@ -392,7 +414,7 @@ describe('sidepanel app', () => {
   });
 
   it('should send on Enter key (not Shift+Enter)', async () => {
-    await import('../app');
+    await importApp();
     const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
     btnNew.click();
     await vi.waitFor(() => {
@@ -408,7 +430,7 @@ describe('sidepanel app', () => {
   });
 
   it('should not send on Shift+Enter', async () => {
-    await import('../app');
+    await importApp();
     const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
     btnNew.click();
     await vi.waitFor(() => {
@@ -426,7 +448,7 @@ describe('sidepanel app', () => {
   // input auto-resize
   // =========================================================================
   it('should auto-resize textarea on input', async () => {
-    await import('../app');
+    await importApp();
     const input = document.querySelector('#msg-input') as HTMLTextAreaElement;
     Object.defineProperty(input, 'scrollHeight', { value: 200, configurable: true });
     input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -435,7 +457,7 @@ describe('sidepanel app', () => {
   });
 
   it('should cap textarea height at 120px', async () => {
-    await import('../app');
+    await importApp();
     const input = document.querySelector('#msg-input') as HTMLTextAreaElement;
     Object.defineProperty(input, 'scrollHeight', { value: 500, configurable: true });
     input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -446,7 +468,7 @@ describe('sidepanel app', () => {
   // setConnStatus
   // =========================================================================
   it('should show connected status after creating session', async () => {
-    await import('../app');
+    await importApp();
     const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
     btnNew.click();
     await vi.waitFor(() => {
@@ -459,7 +481,7 @@ describe('sidepanel app', () => {
   // openSettings / closeSettings
   // =========================================================================
   it('should open settings overlay on btn-settings click', async () => {
-    await import('../app');
+    await importApp();
     const btnSettings = document.querySelector('#btn-settings') as HTMLButtonElement;
     btnSettings.click();
     await vi.waitFor(() => {
@@ -469,7 +491,7 @@ describe('sidepanel app', () => {
   });
 
   it('should populate settings form with current values', async () => {
-    await import('../app');
+    await importApp();
     const btnSettings = document.querySelector('#btn-settings') as HTMLButtonElement;
     btnSettings.click();
     await vi.waitFor(() => {
@@ -487,7 +509,7 @@ describe('sidepanel app', () => {
   });
 
   it('should close settings on cancel button', async () => {
-    await import('../app');
+    await importApp();
     const btnSettings = document.querySelector('#btn-settings') as HTMLButtonElement;
     btnSettings.click();
     await vi.waitFor(() => {
@@ -502,7 +524,7 @@ describe('sidepanel app', () => {
   });
 
   it('should close settings on overlay click (backdrop)', async () => {
-    await import('../app');
+    await importApp();
     const btnSettings = document.querySelector('#btn-settings') as HTMLButtonElement;
     btnSettings.click();
     await vi.waitFor(() => {
@@ -517,7 +539,7 @@ describe('sidepanel app', () => {
   });
 
   it('should not close settings when clicking inside settings panel', async () => {
-    await import('../app');
+    await importApp();
     const btnSettings = document.querySelector('#btn-settings') as HTMLButtonElement;
     btnSettings.click();
     await vi.waitFor(() => {
@@ -533,7 +555,7 @@ describe('sidepanel app', () => {
   // saveSettingsFromForm
   // =========================================================================
   it('should save settings and close overlay on form submit', async () => {
-    await import('../app');
+    await importApp();
     const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
     btnNew.click();
     await vi.waitFor(() => {
@@ -568,7 +590,7 @@ describe('sidepanel app', () => {
   });
 
   it('should use default settings for empty form values', async () => {
-    await import('../app');
+    await importApp();
     const btnSettings = document.querySelector('#btn-settings') as HTMLButtonElement;
     btnSettings.click();
     await vi.waitFor(() => {
@@ -600,7 +622,7 @@ describe('sidepanel app', () => {
   });
 
   it('should save secret value even when empty', async () => {
-    await import('../app');
+    await importApp();
     const btnSettings = document.querySelector('#btn-settings') as HTMLButtonElement;
     btnSettings.click();
     await vi.waitFor(() => {
@@ -627,7 +649,7 @@ describe('sidepanel app', () => {
   // Password toggle
   // =========================================================================
   it('should toggle password visibility', async () => {
-    await import('../app');
+    await importApp();
     const toggleBtn = document.querySelector('#btn-toggle-secret') as HTMLButtonElement;
     const secretInput = document.querySelector('#s-secret') as HTMLInputElement;
     const eyeOpen = document.querySelector('.eye-open') as HTMLElement;
@@ -663,7 +685,7 @@ describe('sidepanel app', () => {
     };
     storedActive = 'id-1';
 
-    await import('../app');
+    await importApp();
     const title = document.querySelector('.session-title');
     expect(title?.innerHTML).not.toContain('<script>');
     expect(title?.textContent).toBe('<script>alert("xss")</script>');
@@ -688,7 +710,7 @@ describe('sidepanel app', () => {
     };
     storedActive = sessionId;
 
-    await import('../app');
+    await importApp();
     await vi.waitFor(() => {
       const msgs = document.querySelectorAll('.msg');
       expect(msgs.length).toBe(2);
@@ -701,7 +723,7 @@ describe('sidepanel app', () => {
   // Multiple sessions
   // =========================================================================
   it('should create multiple sessions and render them', async () => {
-    await import('../app');
+    await importApp();
     const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
 
     btnNew.click();
@@ -723,7 +745,7 @@ describe('sidepanel app', () => {
   // =========================================================================
   describe('WS event handlers', () => {
     it('should handle ws ready event', async () => {
-      await import('../app');
+      await importApp();
       const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
       btnNew.click();
       await vi.waitFor(() => {
@@ -733,25 +755,25 @@ describe('sidepanel app', () => {
     });
 
     it('should handle ws error event on connect failure', async () => {
-      // Override connect to throw
       const origConnect = FakeWsClient.prototype.connect;
       FakeWsClient.prototype.connect = async function () {
         throw new Error('Connection refused');
       };
-
-      await import('../app');
-      const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
-      btnNew.click();
-      await vi.waitFor(() => {
-        const connStatus = document.querySelector('#conn-status');
-        expect(connStatus?.className).toBe('error');
-      });
-
-      FakeWsClient.prototype.connect = origConnect;
+      try {
+        await importApp();
+        const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
+        btnNew.click();
+        await vi.waitFor(() => {
+          const connStatus = document.querySelector('#conn-status');
+          expect(connStatus?.className).toBe('error');
+        });
+      } finally {
+        FakeWsClient.prototype.connect = origConnect;
+      }
     });
 
     it('should handle ws close event gracefully', async () => {
-      await import('../app');
+      await importApp();
       const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
       btnNew.click();
       await vi.waitFor(() => {
@@ -766,29 +788,29 @@ describe('sidepanel app', () => {
   // sendMessage when not connected
   // =========================================================================
   it('should try to reconnect when sending while disconnected', async () => {
-    // Make connect() succeed but ws.connected = false initially
     const origConnect = FakeWsClient.prototype.connect;
     FakeWsClient.prototype.connect = async function () {
       this.connected = true;
       this.emit('ready', {});
     };
-
-    await import('../app');
-    const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
-    btnNew.click();
-    await vi.waitFor(() => {
-      const connStatus = document.querySelector('#conn-status');
-      expect(connStatus?.className).toBe('connected');
-    });
-
-    FakeWsClient.prototype.connect = origConnect;
+    try {
+      await importApp();
+      const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
+      btnNew.click();
+      await vi.waitFor(() => {
+        const connStatus = document.querySelector('#conn-status');
+        expect(connStatus?.className).toBe('connected');
+      });
+    } finally {
+      FakeWsClient.prototype.connect = origConnect;
+    }
   });
 
   // =========================================================================
   // settings form submit should prevent default
   // =========================================================================
   it('should prevent default form submission', async () => {
-    await import('../app');
+    await importApp();
     const form = document.querySelector('#settings-form') as HTMLFormElement;
     const preventDefaultSpy = vi.spyOn(Event.prototype, 'preventDefault');
     form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
@@ -799,7 +821,7 @@ describe('sidepanel app', () => {
   // setConnStatus with detail
   // =========================================================================
   it('should show status detail for ready with chat_id', async () => {
-    await import('../app');
+    await importApp();
     const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
     btnNew.click();
     await vi.waitFor(() => {
@@ -813,7 +835,7 @@ describe('sidepanel app', () => {
   // scrollToBottom
   // =========================================================================
   it('should call requestAnimationFrame for scroll', async () => {
-    await import('../app');
+    await importApp();
     const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
     btnNew.click();
     await vi.waitFor(() => {
@@ -826,7 +848,7 @@ describe('sidepanel app', () => {
   // =========================================================================
   describe('WS event handlers - message/delta/stream_end', () => {
     it('should handle ws message event and render assistant message', async () => {
-      await import('../app');
+      await importApp();
       const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
       btnNew.click();
       await vi.waitFor(() => {
@@ -847,7 +869,7 @@ describe('sidepanel app', () => {
     });
 
     it('should handle ws delta event - first delta starts streaming', async () => {
-      await import('../app');
+      await importApp();
       const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
       btnNew.click();
       await vi.waitFor(() => {
@@ -868,7 +890,7 @@ describe('sidepanel app', () => {
     });
 
     it('should handle ws delta event - subsequent delta appends to existing message', async () => {
-      await import('../app');
+      await importApp();
       const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
       btnNew.click();
       await vi.waitFor(() => {
@@ -890,7 +912,7 @@ describe('sidepanel app', () => {
     });
 
     it('should handle ws stream_end event', async () => {
-      await import('../app');
+      await importApp();
       const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
       btnNew.click();
       await vi.waitFor(() => {
@@ -913,7 +935,7 @@ describe('sidepanel app', () => {
     });
 
     it('should handle ws close event', async () => {
-      await import('../app');
+      await importApp();
       const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
       btnNew.click();
       await vi.waitFor(() => {
@@ -932,7 +954,7 @@ describe('sidepanel app', () => {
     });
 
     it('should handle ws error event', async () => {
-      await import('../app');
+      await importApp();
       const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
       btnNew.click();
       await vi.waitFor(() => {
@@ -949,7 +971,7 @@ describe('sidepanel app', () => {
     });
 
     it('should handle ws ready event with chat_id detail', async () => {
-      await import('../app');
+      await importApp();
       const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
       btnNew.click();
       await vi.waitFor(() => {
@@ -970,7 +992,7 @@ describe('sidepanel app', () => {
   // sendMessage reconnect path
   // =========================================================================
   it('should reconnect when sending while ws is disconnected', async () => {
-    await import('../app');
+    await importApp();
     const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
     btnNew.click();
     await vi.waitFor(() => {
@@ -1003,37 +1025,38 @@ describe('sidepanel app', () => {
     FakeWsClient.prototype.connect = async function () {
       throw new Error('reconnect failed');
     };
+    try {
+      await importApp();
+      const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
+      btnNew.click();
+      await vi.waitFor(() => {
+        const connStatus = document.querySelector('#conn-status');
+        expect(connStatus?.className).toBe('error');
+      });
 
-    await import('../app');
-    const btnNew = document.querySelector('#btn-new') as HTMLButtonElement;
-    btnNew.click();
-    await vi.waitFor(() => {
-      const connStatus = document.querySelector('#conn-status');
-      expect(connStatus?.className).toBe('error');
-    });
+      // Disconnect and try to send
+      const ws = FakeWsClient._instances[0];
+      ws.connected = false;
 
-    // Disconnect and try to send
-    const ws = FakeWsClient._instances[0];
-    ws.connected = false;
+      const input = document.querySelector('#msg-input') as HTMLTextAreaElement;
+      input.value = 'test';
+      const sendBtn = document.querySelector('#btn-send') as HTMLButtonElement;
+      sendBtn.click();
 
-    const input = document.querySelector('#msg-input') as HTMLTextAreaElement;
-    input.value = 'test';
-    const sendBtn = document.querySelector('#btn-send') as HTMLButtonElement;
-    sendBtn.click();
-
-    await vi.waitFor(() => {
-      const connStatus = document.querySelector('#conn-status');
-      expect(connStatus?.textContent).toContain('Not connected');
-    });
-
-    FakeWsClient.prototype.connect = origConnect;
+      await vi.waitFor(() => {
+        const connStatus = document.querySelector('#conn-status');
+        expect(connStatus?.textContent).toContain('Not connected');
+      });
+    } finally {
+      FakeWsClient.prototype.connect = origConnect;
+    }
   });
 
   // =========================================================================
   // sendMessage when no active session
   // =========================================================================
   it('should not send when no active session', async () => {
-    await import('../app');
+    await importApp();
     // No session created, so send should be a no-op
     const input = document.querySelector('#msg-input') as HTMLTextAreaElement;
     input.value = 'no session';

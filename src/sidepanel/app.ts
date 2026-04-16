@@ -8,7 +8,7 @@ import type { Settings } from '../lib/types';
 /** Maximum user message length in characters. */
 const MAX_MESSAGE_LENGTH = 32000;
 
-(async function () {
+export const ready = (async function () {
   const sessions = new SessionManager();
   let ws: NanobotWsClient | null = null;
   let isStreaming = false;

@@ -5,6 +5,8 @@
  * - Relays HTTP fetch and WebSocket from content scripts (bypasses CSP & mixed-content)
  */
 
+import { loadSettings } from '../lib/storage';
+
 // ---------------------------------------------------------------------------
 // Side panel
 // ---------------------------------------------------------------------------
@@ -61,6 +63,21 @@ function _cleanupRelay(tabId: number): void {
   relayConnections.delete(tabId);
 }
 
+/** Validate that a URL matches the configured backend origin. */
+async function _isAllowedUrl(url: string): Promise<boolean> {
+  try {
+    const settings = await loadSettings();
+    const candidate = new URL(url);
+    const expectedPort = String(settings.port);
+    // Allow both http/ws and https/wss schemes
+    const allowedSchemes = ['http:', 'https:', 'ws:', 'wss:'];
+    if (!allowedSchemes.includes(candidate.protocol)) return false;
+    return candidate.hostname === settings.host && candidate.port === expectedPort;
+  } catch {
+    return false;
+  }
+}
+
 chrome.runtime.onMessage.addListener(
   (
     msg: { type: string; url?: string; headers?: Record<string, string>; text?: string },
@@ -71,19 +88,32 @@ chrome.runtime.onMessage.addListener(
 
     /* --- HTTP fetch relay (for token issuance) --- */
     if (msg.type === 'NB_FETCH') {
-      fetch(msg.url!, { headers: msg.headers || {} })
-        .then((resp) =>
-          resp.text().then((body) =>
-            sendResponse({
-              ok: resp.ok,
-              status: resp.status,
-              body,
-            }),
-          ),
-        )
-        .catch((err: Error) =>
-          sendResponse({ ok: false, status: 0, body: err.message }),
-        );
+      if (!msg.url) {
+        sendResponse({ ok: false, status: 0, body: 'Missing URL' });
+        return false;
+      }
+      _isAllowedUrl(msg.url).then((allowed) => {
+        if (!allowed) {
+          sendResponse({ ok: false, status: 0, body: 'URL not allowed' });
+          return;
+        }
+        const { Authorization } = msg.headers || {};
+        const headers: Record<string, string> = {};
+        if (Authorization) headers['Authorization'] = Authorization;
+        fetch(msg.url!, { headers })
+          .then((resp) =>
+            resp.text().then((body) =>
+              sendResponse({
+                ok: resp.ok,
+                status: resp.status,
+                body,
+              }),
+            ),
+          )
+          .catch((err: Error) =>
+            sendResponse({ ok: false, status: 0, body: err.message }),
+          );
+      });
       return true; // async sendResponse
     }
 
@@ -93,37 +123,48 @@ chrome.runtime.onMessage.addListener(
         sendResponse({ ok: false, error: 'No sender tab' });
         return false;
       }
-
-      // Close any existing relay connection for this tab
-      const existing = relayConnections.get(senderTabId);
-      if (existing) existing.close();
-
-      try {
-        const ws = new WebSocket(msg.url!);
-
-        ws.addEventListener('open', () => {
-          _relayToTab(senderTabId, 'NB_WS_OPEN');
-        });
-
-        ws.addEventListener('message', (e: MessageEvent) => {
-          _relayToTab(senderTabId, 'NB_WS_MESSAGE', { data: e.data });
-        });
-
-        ws.addEventListener('close', (e: CloseEvent) => {
-          _relayToTab(senderTabId, 'NB_WS_CLOSE', { code: e.code, reason: e.reason });
-          _cleanupRelay(senderTabId);
-        });
-
-        ws.addEventListener('error', () => {
-          _relayToTab(senderTabId, 'NB_WS_ERROR');
-        });
-
-        relayConnections.set(senderTabId, ws);
-        sendResponse({ ok: true });
-      } catch (err: unknown) {
-        sendResponse({ ok: false, error: (err as Error).message });
+      if (!msg.url) {
+        sendResponse({ ok: false, error: 'Missing URL' });
+        return false;
       }
-      return false;
+
+      _isAllowedUrl(msg.url).then((allowed) => {
+        if (!allowed) {
+          sendResponse({ ok: false, error: 'URL not allowed' });
+          return;
+        }
+
+        // Close any existing relay connection for this tab
+        const existing = relayConnections.get(senderTabId!);
+        if (existing) existing.close();
+
+        try {
+          const ws = new WebSocket(msg.url!);
+
+          ws.addEventListener('open', () => {
+            _relayToTab(senderTabId!, 'NB_WS_OPEN');
+          });
+
+          ws.addEventListener('message', (e: MessageEvent) => {
+            _relayToTab(senderTabId!, 'NB_WS_MESSAGE', { data: e.data });
+          });
+
+          ws.addEventListener('close', (e: CloseEvent) => {
+            _relayToTab(senderTabId!, 'NB_WS_CLOSE', { code: e.code, reason: e.reason });
+            _cleanupRelay(senderTabId!);
+          });
+
+          ws.addEventListener('error', () => {
+            _relayToTab(senderTabId!, 'NB_WS_ERROR');
+          });
+
+          relayConnections.set(senderTabId!, ws);
+          sendResponse({ ok: true });
+        } catch (err: unknown) {
+          sendResponse({ ok: false, error: (err as Error).message });
+        }
+      });
+      return true; // async sendResponse for URL validation
     }
 
     if (msg.type === 'NB_WS_SEND') {
@@ -147,3 +188,15 @@ chrome.runtime.onMessage.addListener(
     return undefined;
   },
 );
+
+// ---------------------------------------------------------------------------
+// Cleanup relay connections when tabs are closed
+// ---------------------------------------------------------------------------
+
+chrome.tabs.onRemoved.addListener((tabId: number) => {
+  const ws = relayConnections.get(tabId);
+  if (ws) {
+    ws.close();
+    _cleanupRelay(tabId);
+  }
+});

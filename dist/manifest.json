@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Nanopilot",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "AI assistant powered by Nanobot",
   "permissions": ["storage", "activeTab", "scripting", "sidePanel"],
   "host_permissions": ["http://*/*", "https://*/*"],

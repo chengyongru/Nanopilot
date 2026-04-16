@@ -251,8 +251,10 @@
             },
             1e4
           );
+          const maxPolls = 250;
+          let pollCount = 0;
           const check = () => {
-            if (this._relayAbort) return;
+            if (this._relayAbort || ++pollCount > maxPolls) return;
             if (this._relayConnected) {
               clearTimeout(timeout);
               resolve();
@@ -54557,18 +54559,23 @@ Please report this to https://github.com/markedjs/marked.`, e) {
     let streamRAF = 0;
     const $2 = (sel) => document.querySelector(sel);
     const $input = (sel) => document.querySelector(sel);
-    const sessionListEl = $2("#session-list");
-    const emptyStateEl = $2("#empty-state");
-    const messagesEl = $2("#messages");
-    const inputBarEl = $2("#input-bar");
-    const connStatusEl = $2("#conn-status");
-    const msgInput = $2("#msg-input");
-    const btnSend = $2("#btn-send");
-    const btnNew = $2("#btn-new");
-    const btnSettings = $2("#btn-settings");
-    const settingsOverlay = $2("#settings-overlay");
-    const settingsForm = $2("#settings-form");
-    const btnCancel = $2("#btn-settings-cancel");
+    const $$ = (sel) => {
+      const el = document.querySelector(sel);
+      if (!el) throw new Error(`Required element not found: ${sel}`);
+      return el;
+    };
+    const sessionListEl = $$("#session-list");
+    const emptyStateEl = $$("#empty-state");
+    const messagesEl = $$("#messages");
+    const inputBarEl = $$("#input-bar");
+    const connStatusEl = $$("#conn-status");
+    const msgInput = $$("#msg-input");
+    const btnSend = $$("#btn-send");
+    const btnNew = $$("#btn-new");
+    const btnSettings = $$("#btn-settings");
+    const settingsOverlay = $$("#settings-overlay");
+    const settingsForm = $$("#settings-form");
+    const btnCancel = $$("#btn-settings-cancel");
     const settingsErrorEl = $2("#settings-error");
     await sessions.load();
     renderSessionList();
@@ -54634,7 +54641,7 @@ Please report this to https://github.com/markedjs/marked.`, e) {
       sessions.delete(id);
       renderSessionList();
       if (sessions.activeId) {
-        switchSession(sessions.activeId);
+        await switchSession(sessions.activeId);
       } else {
         showEmpty();
         setConnStatus("disconnected");
@@ -54661,7 +54668,7 @@ Please report this to https://github.com/markedjs/marked.`, e) {
       bodyEl.className = "msg-body";
       if (role === "assistant") {
         bodyEl.innerHTML = renderMarkdown(content);
-        initCopyButtons(bodyEl);
+        if (finalized) initCopyButtons(bodyEl);
       } else {
         bodyEl.textContent = content;
       }
@@ -54893,7 +54900,7 @@ Please report this to https://github.com/markedjs/marked.`, e) {
       msgInput.style.height = Math.min(msgInput.scrollHeight, 120) + "px";
     });
     const secretInput = $input("#s-secret");
-    const toggleBtn = $2("#btn-toggle-secret");
+    const toggleBtn = $$("#btn-toggle-secret");
     toggleBtn.addEventListener("click", () => {
       const showing = secretInput.type === "text";
       secretInput.type = showing ? "password" : "text";
@@ -54902,6 +54909,9 @@ Please report this to https://github.com/markedjs/marked.`, e) {
       if (eyeOpen) eyeOpen.style.display = showing ? "" : "none";
       if (eyeClosed) eyeClosed.style.display = showing ? "none" : "";
       toggleBtn.title = showing ? "Show password" : "Hide password";
+    });
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) sessions._flushPersist();
     });
     window.addEventListener("pagehide", () => {
       sessions._flushPersist();

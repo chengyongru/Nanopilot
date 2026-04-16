@@ -164,8 +164,11 @@ export class NanobotWsClient {
           },
           10000,
         );
+        // Safety: hard cap on polling iterations to prevent infinite loops
+        const maxPolls = 250; // 250 * 50ms = 12.5s > 10s timeout
+        let pollCount = 0;
         const check = () => {
-          if (this._relayAbort) return;
+          if (this._relayAbort || ++pollCount > maxPolls) return;
           if (this._relayConnected) {
             clearTimeout(timeout);
             resolve();

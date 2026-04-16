@@ -20,11 +20,13 @@ function setupChrome(): void {
   const actionOnClicked = { addListener: vi.fn() };
   const commandsOnCommand = { addListener: vi.fn() };
   const runtimeOnMessage = { addListener: vi.fn() };
+  const tabsOnRemoved = { addListener: vi.fn() };
 
   addListenerSpies = {
     actionOnClicked: actionOnClicked.addListener,
     commandsOnCommand: commandsOnCommand.addListener,
     runtimeOnMessage: runtimeOnMessage.addListener,
+    tabsOnRemoved: tabsOnRemoved.addListener,
   };
 
   vi.stubGlobal('chrome', {
@@ -35,10 +37,17 @@ function setupChrome(): void {
     tabs: {
       query: mockQuery,
       sendMessage: mockSendMessage,
+      onRemoved: tabsOnRemoved,
     },
     scripting: {
       insertCSS: mockInsertCSS,
       executeScript: mockExecuteScript,
+    },
+    storage: {
+      local: {
+        get: vi.fn().mockResolvedValue({}),
+        set: vi.fn().mockResolvedValue(undefined),
+      },
     },
   } as unknown as typeof chrome);
 }
@@ -51,6 +60,26 @@ function setupChrome(): void {
 async function importAndGetMessageHandler() {
   vi.resetModules();
   setupChrome();
+  vi.doMock('../../lib/storage', () => ({
+    loadSettings: vi.fn().mockResolvedValue({
+      host: '127.0.0.1',
+      port: 8765,
+      path: '/ws',
+      tokenIssuePath: '/auth/token',
+      tokenIssueSecret: '',
+      clientId: 'browser-extension',
+    }),
+    saveSettings: vi.fn(),
+    DEFAULT_SETTINGS: {
+      host: '127.0.0.1',
+      port: 8765,
+      path: '/ws',
+      tokenIssuePath: '/auth/token',
+      tokenIssueSecret: '',
+      clientId: 'browser-extension',
+    },
+    validateSettings: vi.fn().mockReturnValue(null),
+  }));
 // @ts-expect-error -- service-worker.ts is not a module; imported for side effects
 await import('../service-worker');
   const handler = addListenerSpies.runtimeOnMessage.mock.calls[0][0] as (
@@ -166,7 +195,7 @@ describe('service-worker', () => {
       }));
 
       const result = handler(
-        { type: 'NB_FETCH', url: 'https://api.example.com/data', headers: { 'X-Custom': 'val' } },
+        { type: 'NB_FETCH', url: 'http://127.0.0.1:8765/auth/token', headers: { Authorization: 'Bearer test' } },
         {},
         sendResponse,
       );
@@ -179,6 +208,27 @@ describe('service-worker', () => {
       }));
     });
 
+    it('rejects fetch to disallowed URL', async () => {
+      const sendResponse = vi.fn();
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve('ok'),
+      }));
+
+      handler(
+        { type: 'NB_FETCH', url: 'https://evil.example.com/data' },
+        {},
+        sendResponse,
+      );
+
+      await vi.waitFor(() => expect(sendResponse).toHaveBeenCalledWith({
+        ok: false,
+        status: 0,
+        body: 'URL not allowed',
+      }));
+    });
+
     it('handles fetch with no headers', async () => {
       const sendResponse = vi.fn();
       vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
@@ -188,7 +238,7 @@ describe('service-worker', () => {
       }));
 
       handler(
-        { type: 'NB_FETCH', url: 'https://api.example.com/data' },
+        { type: 'NB_FETCH', url: 'http://127.0.0.1:8765/auth/token' },
         {},
         sendResponse,
       );
@@ -205,7 +255,7 @@ describe('service-worker', () => {
       vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Network failure')));
 
       handler(
-        { type: 'NB_FETCH', url: 'https://api.example.com/fail' },
+        { type: 'NB_FETCH', url: 'http://127.0.0.1:8765/auth/token' },
         {},
         sendResponse,
       );
@@ -222,7 +272,7 @@ describe('service-worker', () => {
   // Message relay — NB_WS_CONNECT
   // =========================================================================
   describe('NB_WS_CONNECT', () => {
-    it('creates WebSocket and returns ok', () => {
+    it('creates WebSocket and returns ok', async () => {
       const sendResponse = vi.fn();
       const mockWs = {
         addEventListener: vi.fn(),
@@ -233,21 +283,39 @@ describe('service-worker', () => {
       vi.stubGlobal('WebSocket', vi.fn().mockImplementation(() => mockWs));
 
       const result = handler(
-        { type: 'NB_WS_CONNECT', url: 'ws://localhost:8765/ws' },
+        { type: 'NB_WS_CONNECT', url: 'ws://127.0.0.1:8765/ws' },
         { tab: { id: 42 } } as chrome.runtime.MessageSender,
         sendResponse,
       );
 
-      expect(result).toBe(false);
-      expect(WebSocket).toHaveBeenCalledWith('ws://localhost:8765/ws');
-      expect(sendResponse).toHaveBeenCalledWith({ ok: true });
+      expect(result).toBe(true); // async due to URL validation
+      await vi.waitFor(() => expect(sendResponse).toHaveBeenCalledWith({ ok: true }));
+      expect(WebSocket).toHaveBeenCalledWith('ws://127.0.0.1:8765/ws');
       expect(mockWs.addEventListener).toHaveBeenCalledWith('open', expect.any(Function));
       expect(mockWs.addEventListener).toHaveBeenCalledWith('message', expect.any(Function));
       expect(mockWs.addEventListener).toHaveBeenCalledWith('close', expect.any(Function));
       expect(mockWs.addEventListener).toHaveBeenCalledWith('error', expect.any(Function));
     });
 
-    it('closes existing relay before opening new one for same tab', () => {
+    it('rejects WebSocket to disallowed URL', async () => {
+      const sendResponse = vi.fn();
+      vi.stubGlobal('WebSocket', vi.fn().mockImplementation(() => ({
+        addEventListener: vi.fn(),
+        close: vi.fn(),
+        send: vi.fn(),
+        readyState: WebSocket.OPEN,
+      })));
+
+      handler(
+        { type: 'NB_WS_CONNECT', url: 'ws://evil.example.com/ws' },
+        { tab: { id: 42 } } as chrome.runtime.MessageSender,
+        sendResponse,
+      );
+
+      await vi.waitFor(() => expect(sendResponse).toHaveBeenCalledWith({ ok: false, error: 'URL not allowed' }));
+    });
+
+    it('closes existing relay before opening new one for same tab', async () => {
       const sendResponse = vi.fn();
       const oldWs = {
         addEventListener: vi.fn(),
@@ -268,37 +336,39 @@ describe('service-worker', () => {
       }));
 
       handler(
-        { type: 'NB_WS_CONNECT', url: 'ws://localhost/a' },
+        { type: 'NB_WS_CONNECT', url: 'ws://127.0.0.1:8765/a' },
         { tab: { id: 1 } } as chrome.runtime.MessageSender,
         sendResponse,
       );
+
+      await vi.waitFor(() => expect(sendResponse).toHaveBeenCalled());
 
       handler(
-        { type: 'NB_WS_CONNECT', url: 'ws://localhost/b' },
+        { type: 'NB_WS_CONNECT', url: 'ws://127.0.0.1:8765/b' },
         { tab: { id: 1 } } as chrome.runtime.MessageSender,
         sendResponse,
       );
 
+      await vi.waitFor(() => expect(sendResponse).toHaveBeenCalledTimes(2));
       expect(oldWs.close).toHaveBeenCalled();
     });
 
-    it('returns ok: false on WebSocket constructor error', () => {
+    it('returns ok: false on WebSocket constructor error', async () => {
       const sendResponse = vi.fn();
       vi.stubGlobal('WebSocket', vi.fn().mockImplementation(() => {
         throw new Error('invalid url');
       }));
 
-      const result = handler(
-        { type: 'NB_WS_CONNECT', url: 'bad-url' },
+      handler(
+        { type: 'NB_WS_CONNECT', url: 'ws://127.0.0.1:8765/ws' },
         { tab: { id: 1 } } as chrome.runtime.MessageSender,
         sendResponse,
       );
 
-      expect(result).toBe(false);
-      expect(sendResponse).toHaveBeenCalledWith({ ok: false, error: 'invalid url' });
+      await vi.waitFor(() => expect(sendResponse).toHaveBeenCalledWith({ ok: false, error: 'invalid url' }));
     });
 
-    it('handles open event and relays to tab', () => {
+    it('handles open event and relays to tab', async () => {
       const sendResponse = vi.fn();
       const mockWs = {
         addEventListener: vi.fn(),
@@ -309,10 +379,12 @@ describe('service-worker', () => {
       vi.stubGlobal('WebSocket', vi.fn().mockImplementation(() => mockWs));
 
       handler(
-        { type: 'NB_WS_CONNECT', url: 'ws://localhost/ws' },
+        { type: 'NB_WS_CONNECT', url: 'ws://127.0.0.1:8765/ws' },
         { tab: { id: 42 } } as chrome.runtime.MessageSender,
         sendResponse,
       );
+
+      await vi.waitFor(() => expect(sendResponse).toHaveBeenCalled());
 
       // Find and call the open handler
       const openHandler = mockWs.addEventListener.mock.calls.find(
@@ -322,7 +394,7 @@ describe('service-worker', () => {
       expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(42, { type: 'NB_WS_OPEN' });
     });
 
-    it('handles message event and relays to tab', () => {
+    it('handles message event and relays to tab', async () => {
       const sendResponse = vi.fn();
       const mockWs = {
         addEventListener: vi.fn(),
@@ -333,10 +405,12 @@ describe('service-worker', () => {
       vi.stubGlobal('WebSocket', vi.fn().mockImplementation(() => mockWs));
 
       handler(
-        { type: 'NB_WS_CONNECT', url: 'ws://localhost/ws' },
+        { type: 'NB_WS_CONNECT', url: 'ws://127.0.0.1:8765/ws' },
         { tab: { id: 42 } } as chrome.runtime.MessageSender,
         sendResponse,
       );
+
+      await vi.waitFor(() => expect(sendResponse).toHaveBeenCalled());
 
       const msgHandler = mockWs.addEventListener.mock.calls.find(
         (c: unknown[]) => c[0] === 'message',
@@ -348,7 +422,7 @@ describe('service-worker', () => {
       });
     });
 
-    it('handles close event, relays to tab, and cleans up', () => {
+    it('handles close event, relays to tab, and cleans up', async () => {
       const sendResponse = vi.fn();
       const mockWs = {
         addEventListener: vi.fn(),
@@ -359,10 +433,12 @@ describe('service-worker', () => {
       vi.stubGlobal('WebSocket', vi.fn().mockImplementation(() => mockWs));
 
       handler(
-        { type: 'NB_WS_CONNECT', url: 'ws://localhost/ws' },
+        { type: 'NB_WS_CONNECT', url: 'ws://127.0.0.1:8765/ws' },
         { tab: { id: 42 } } as chrome.runtime.MessageSender,
         sendResponse,
       );
+
+      await vi.waitFor(() => expect(sendResponse).toHaveBeenCalled());
 
       const closeHandler = mockWs.addEventListener.mock.calls.find(
         (c: unknown[]) => c[0] === 'close',
@@ -375,7 +451,7 @@ describe('service-worker', () => {
       });
     });
 
-    it('handles error event and relays to tab', () => {
+    it('handles error event and relays to tab', async () => {
       const sendResponse = vi.fn();
       const mockWs = {
         addEventListener: vi.fn(),
@@ -386,10 +462,12 @@ describe('service-worker', () => {
       vi.stubGlobal('WebSocket', vi.fn().mockImplementation(() => mockWs));
 
       handler(
-        { type: 'NB_WS_CONNECT', url: 'ws://localhost/ws' },
+        { type: 'NB_WS_CONNECT', url: 'ws://127.0.0.1:8765/ws' },
         { tab: { id: 42 } } as chrome.runtime.MessageSender,
         sendResponse,
       );
+
+      await vi.waitFor(() => expect(sendResponse).toHaveBeenCalled());
 
       const errorHandler = mockWs.addEventListener.mock.calls.find(
         (c: unknown[]) => c[0] === 'error',
@@ -400,7 +478,7 @@ describe('service-worker', () => {
       });
     });
 
-    it('handles tab close when relayWs close event fires (relayWs=null after)', () => {
+    it('handles tab close when relayWs close event fires (relayWs=null after)', async () => {
       const sendResponse = vi.fn();
       const mockWs = {
         addEventListener: vi.fn(),
@@ -411,10 +489,12 @@ describe('service-worker', () => {
       vi.stubGlobal('WebSocket', vi.fn().mockImplementation(() => mockWs));
 
       handler(
-        { type: 'NB_WS_CONNECT', url: 'ws://localhost/ws' },
+        { type: 'NB_WS_CONNECT', url: 'ws://127.0.0.1:8765/ws' },
         { tab: { id: 42 } } as chrome.runtime.MessageSender,
         sendResponse,
       );
+
+      await vi.waitFor(() => expect(sendResponse).toHaveBeenCalled());
 
       const closeHandler = mockWs.addEventListener.mock.calls.find(
         (c: unknown[]) => c[0] === 'close',
@@ -431,11 +511,9 @@ describe('service-worker', () => {
         sendResponse2,
       );
       expect(result).toBe(false);
-      // No additional sendMessage call (relayWs is null, so close() is not called)
-      // The sendMessage from the close event is the last one for that tab
     });
 
-    it('handles _relayToTab failure gracefully', () => {
+    it('handles _relayToTab failure gracefully', async () => {
       const sendResponse = vi.fn();
       const mockWs = {
         addEventListener: vi.fn(),
@@ -447,10 +525,12 @@ describe('service-worker', () => {
       mockSendMessage.mockRejectedValue(new Error('tab closed'));
 
       handler(
-        { type: 'NB_WS_CONNECT', url: 'ws://localhost/ws' },
+        { type: 'NB_WS_CONNECT', url: 'ws://127.0.0.1:8765/ws' },
         { tab: { id: 42 } } as chrome.runtime.MessageSender,
         sendResponse,
       );
+
+      await vi.waitFor(() => expect(sendResponse).toHaveBeenCalled());
 
       const openHandler = mockWs.addEventListener.mock.calls.find(
         (c: unknown[]) => c[0] === 'open',
@@ -466,6 +546,7 @@ describe('service-worker', () => {
   // =========================================================================
   describe('NB_WS_SEND', () => {
     it('sends text on open connection', async () => {
+      const connectResponse = vi.fn();
       const sendResponse = vi.fn();
       const mockWs = {
         addEventListener: vi.fn(),
@@ -476,10 +557,13 @@ describe('service-worker', () => {
       vi.stubGlobal('WebSocket', vi.fn().mockImplementation(() => mockWs));
 
       handler(
-        { type: 'NB_WS_CONNECT', url: 'ws://localhost/ws' },
+        { type: 'NB_WS_CONNECT', url: 'ws://127.0.0.1:8765/ws' },
         { tab: { id: 1 } } as chrome.runtime.MessageSender,
-        sendResponse,
+        connectResponse,
       );
+
+      // Wait for async URL validation + connection setup
+      await vi.waitFor(() => expect(connectResponse).toHaveBeenCalledWith({ ok: true }));
 
       const result = handler(
         { type: 'NB_WS_SEND', text: 'hello from test' },
@@ -523,6 +607,7 @@ describe('service-worker', () => {
   // =========================================================================
   describe('NB_WS_CLOSE', () => {
     it('closes connection', async () => {
+      const connectResponse = vi.fn();
       const sendResponse = vi.fn();
       const mockWs = {
         addEventListener: vi.fn(),
@@ -533,10 +618,13 @@ describe('service-worker', () => {
       vi.stubGlobal('WebSocket', vi.fn().mockImplementation(() => mockWs));
 
       handler(
-        { type: 'NB_WS_CONNECT', url: 'ws://localhost/ws' },
+        { type: 'NB_WS_CONNECT', url: 'ws://127.0.0.1:8765/ws' },
         { tab: { id: 1 } } as chrome.runtime.MessageSender,
-        sendResponse,
+        connectResponse,
       );
+
+      // Wait for async URL validation + connection setup
+      await vi.waitFor(() => expect(connectResponse).toHaveBeenCalledWith({ ok: true }));
 
       const result = handler(
         { type: 'NB_WS_CLOSE' },

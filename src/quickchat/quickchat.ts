@@ -240,7 +240,7 @@ const QUICK_CHAT_SESSION_TITLE = 'Quick Chat';
     bodyEl.className = 'nb-body';
     if (role === 'assistant') {
       bodyEl.innerHTML = renderMarkdown(content);
-      initCopyButtons(bodyEl);
+      if (finalized) initCopyButtons(bodyEl);
     } else {
       bodyEl.textContent = content;
     }

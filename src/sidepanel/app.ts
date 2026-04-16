@@ -21,19 +21,24 @@ const MAX_MESSAGE_LENGTH = 32000;
   const $ = (sel: string): Element | null => document.querySelector(sel);
   const $input = (sel: string): HTMLInputElement | HTMLTextAreaElement | null =>
     document.querySelector(sel);
+  const $$ = (sel: string): Element => {
+    const el = document.querySelector(sel);
+    if (!el) throw new Error(`Required element not found: ${sel}`);
+    return el;
+  };
 
-  const sessionListEl = $('#session-list')!;
-  const emptyStateEl = $('#empty-state')!;
-  const messagesEl = $('#messages')!;
-  const inputBarEl = $('#input-bar')!;
-  const connStatusEl = $('#conn-status')!;
-  const msgInput = $('#msg-input') as HTMLTextAreaElement;
-  const btnSend = $('#btn-send') as HTMLButtonElement;
-  const btnNew = $('#btn-new') as HTMLButtonElement;
-  const btnSettings = $('#btn-settings') as HTMLButtonElement;
-  const settingsOverlay = $('#settings-overlay')!;
-  const settingsForm = $('#settings-form') as HTMLFormElement;
-  const btnCancel = $('#btn-settings-cancel') as HTMLButtonElement;
+  const sessionListEl = $$('#session-list');
+  const emptyStateEl = $$('#empty-state');
+  const messagesEl = $$('#messages');
+  const inputBarEl = $$('#input-bar');
+  const connStatusEl = $$('#conn-status');
+  const msgInput = $$('#msg-input') as HTMLTextAreaElement;
+  const btnSend = $$('#btn-send') as HTMLButtonElement;
+  const btnNew = $$('#btn-new') as HTMLButtonElement;
+  const btnSettings = $$('#btn-settings') as HTMLButtonElement;
+  const settingsOverlay = $$('#settings-overlay');
+  const settingsForm = $$('#settings-form') as HTMLFormElement;
+  const btnCancel = $$('#btn-settings-cancel') as HTMLButtonElement;
   const settingsErrorEl = $('#settings-error') as HTMLElement | null;
 
   await sessions.load();
@@ -106,7 +111,7 @@ const MAX_MESSAGE_LENGTH = 32000;
     sessions.delete(id);
     renderSessionList();
     if (sessions.activeId) {
-      switchSession(sessions.activeId);
+      await switchSession(sessions.activeId);
     } else {
       showEmpty();
       setConnStatus('disconnected');
@@ -134,7 +139,7 @@ const MAX_MESSAGE_LENGTH = 32000;
 
     if (role === 'assistant') {
       bodyEl.innerHTML = renderMarkdown(content);
-      initCopyButtons(bodyEl);
+      if (finalized) initCopyButtons(bodyEl);
     } else {
       bodyEl.textContent = content;
     }
@@ -406,7 +411,7 @@ const MAX_MESSAGE_LENGTH = 32000;
   });
 
   const secretInput = $input('#s-secret') as HTMLInputElement;
-  const toggleBtn = $('#btn-toggle-secret')!;
+  const toggleBtn = $$('#btn-toggle-secret');
   toggleBtn.addEventListener('click', () => {
     const showing = secretInput.type === 'text';
     secretInput.type = showing ? 'password' : 'text';
@@ -417,7 +422,11 @@ const MAX_MESSAGE_LENGTH = 32000;
     toggleBtn.title = showing ? 'Show password' : 'Hide password';
   });
 
-  // Flush debounced session data on page unload to prevent data loss
+  // Persist debounced session data early when page becomes hidden,
+  // and as a final fallback on pagehide.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) sessions._flushPersist();
+  });
   window.addEventListener('pagehide', () => {
     sessions._flushPersist();
   });

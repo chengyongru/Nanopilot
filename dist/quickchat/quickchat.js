@@ -263,8 +263,10 @@
             },
             1e4
           );
+          const maxPolls = 250;
+          let pollCount = 0;
           const check = () => {
-            if (this._relayAbort) return;
+            if (this._relayAbort || ++pollCount > maxPolls) return;
             if (this._relayConnected) {
               clearTimeout(timeout);
               resolve();
@@ -54712,7 +54714,7 @@ Please report this to https://github.com/markedjs/marked.`, e) {
       bodyEl.className = "nb-body";
       if (role === "assistant") {
         bodyEl.innerHTML = renderMarkdown(content);
-        initCopyButtons(bodyEl);
+        if (finalized) initCopyButtons(bodyEl);
       } else {
         bodyEl.textContent = content;
       }
